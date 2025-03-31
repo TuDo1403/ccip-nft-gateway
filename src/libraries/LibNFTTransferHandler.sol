@@ -37,16 +37,11 @@ library LibNFTTransferHandler {
      * @dev Transfers the ERC721 token out. If the transfer failed, mints the ERC721.
      * @return success Returns `false` if both transfer and mint are failed.
      */
-    function tryTransferOutOrMintERC721(address token, address nftStorage, address to, uint256 id)
-        internal
-        returns (bool success)
-    {
-        success = tryTransferFromERC721(token, nftStorage, to, id);
-        if (!success) {
-            // Skip minting if the token is already owned by the NFT storage contract.
-            // This means that the pool is hasn't been granted approval to transfer the token.
-            if (_tryGetOwnerOf(token, id) == nftStorage) return false;
-
+    function tryTransferOutOrMintERC721(address token, address to, uint256 id) internal returns (bool success) {
+        address owner = _tryGetOwnerOf(token, id);
+        if (owner != address(0)) {
+            return tryTransferFromERC721(token, owner, to, id);
+        } else {
             return _tryMintERC721(token, to, id);
         }
     }
@@ -83,13 +78,14 @@ library LibNFTTransferHandler {
         uint256 externalBalance = IERC1155(token).balanceOf(nftStorage, id);
         if (externalBalance != 0) {
             bool transferred = tryTransferFromERC1155(token, nftStorage, address(this), id, externalBalance);
+            // Return `false` immediately if `nftStorage` holds `nfts` but lacks the necessary approval.
             if (!transferred) return false;
         }
 
         success = tryTransferFromERC1155(token, address(this), to, id, amount);
+        // Fails when balanceOf(address(this), id) < amount
         if (!success) {
             uint256 internalBalance = IERC1155(token).balanceOf(address(this), id);
-
             if (internalBalance == 0) {
                 return _tryMintERC1155(token, to, id, amount);
             }

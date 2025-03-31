@@ -11,10 +11,10 @@ import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.s
 import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-import {ILockReleaseNFTPool} from "src/interfaces/ILockReleaseNFTPool.sol";
+import {ICCIPxRoninNFTGateway} from "src/interfaces/ICCIPxRoninNFTGateway.sol";
 import {LibNFTTransferHandler} from "src/libraries/LibNFTTransferHandler.sol";
 
-contract LockReleaseNFTPool is Ownable2Step, ReentrancyGuard, ERC165, ERC1155Holder, ILockReleaseNFTPool {
+contract CCIPxRoninNFTGateway is Ownable2Step, ReentrancyGuard, ERC165, ERC1155Holder, ICCIPxRoninNFTGateway {
     using LibNFTTransferHandler for address;
 
     address internal immutable i_linkToken;
@@ -151,7 +151,7 @@ contract LockReleaseNFTPool is Ownable2Step, ReentrancyGuard, ERC165, ERC1155Hol
 
         (bool isERC721,) = i_nftAddress.validateERC721OrERC1155(quantity);
         bool sent = isERC721
-            ? i_nftAddress.tryTransferOutOrMintERC721({nftStorage: i_roninGateway, to: to, id: tokenId})
+            ? i_nftAddress.tryTransferOutOrMintERC721({to: to, id: tokenId})
             : i_nftAddress.tryTransferOutOrMintERC1155({nftStorage: i_roninGateway, to: to, id: tokenId, amount: quantity});
         if (!sent) revert NFTReleaseFailed(from, to, tokenId, quantity);
 

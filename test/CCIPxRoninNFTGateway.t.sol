@@ -7,14 +7,14 @@ import {CCIPLocalSimulatorFork, Register} from "@chainlink/local/src/ccip/CCIPLo
 import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {ILockReleaseNFTPool} from "src/interfaces/ILockReleaseNFTPool.sol";
-import {LockReleaseNFTPool} from "src/LockReleaseNFTPool.sol";
+import {ICCIPxRoninNFTGateway} from "src/interfaces/ICCIPxRoninNFTGateway.sol";
+import {CCIPxRoninNFTGateway} from "src/CCIPxRoninNFTGateway.sol";
 import {EncodeExtraArgs} from "./utils/EncodeExtraArgs.sol";
 
 import {IERC1155Mintable} from "src/interfaces/ext/IERC1155Mintable.sol";
 import {IERC721Mintable} from "src/interfaces/ext/IERC721Mintable.sol";
 
-contract LockReleaseNFTPoolTest is Test {
+contract CCIPxRoninNFTGatewayTest is Test {
     CCIPLocalSimulatorFork public ccipLocalSimulatorFork;
 
     uint256 public sepoliaFork;
@@ -26,11 +26,11 @@ contract LockReleaseNFTPoolTest is Test {
     address public alice;
     address public bob;
 
-    LockReleaseNFTPool public sepoliaPoolERC721;
-    LockReleaseNFTPool public saigonPoolERC721;
+    CCIPxRoninNFTGateway public sepoliaPoolERC721;
+    CCIPxRoninNFTGateway public saigonPoolERC721;
 
-    LockReleaseNFTPool public sepoliaPoolERC1155;
-    LockReleaseNFTPool public saigonPoolERC1155;
+    CCIPxRoninNFTGateway public sepoliaPoolERC1155;
+    CCIPxRoninNFTGateway public saigonPoolERC1155;
 
     EncodeExtraArgs public encodeExtraArgs;
 
@@ -67,7 +67,7 @@ contract LockReleaseNFTPoolTest is Test {
             )
         );
 
-        // Step 1) Deploy LockReleaseNFTPool.sol to Ethereum Sepolia
+        // Step 1) Deploy CCIPxRoninNFTGateway.sol to Ethereum Sepolia
         assertEq(vm.activeFork(), sepoliaFork);
 
         sepoliaNetworkDetails = ccipLocalSimulatorFork.getNetworkDetails(block.chainid); // we are currently on Ethereum Sepolia Fork
@@ -77,14 +77,14 @@ contract LockReleaseNFTPoolTest is Test {
             "Sanity check: Ethereum Sepolia chain selector should be 16015286601757825753"
         );
 
-        sepoliaPoolERC721 = new LockReleaseNFTPool(
+        sepoliaPoolERC721 = new CCIPxRoninNFTGateway(
             sepoliaNetworkDetails.routerAddress,
             MAINCHAIN_GATEWAY_V3,
             SEPOLIA_NFT_ERC721,
             sepoliaNetworkDetails.chainSelector,
             sepoliaNetworkDetails.linkAddress
         );
-        sepoliaPoolERC1155 = new LockReleaseNFTPool(
+        sepoliaPoolERC1155 = new CCIPxRoninNFTGateway(
             sepoliaNetworkDetails.routerAddress,
             MAINCHAIN_GATEWAY_V3,
             SEPOLIA_NFT_ERC1155,
@@ -92,7 +92,7 @@ contract LockReleaseNFTPoolTest is Test {
             sepoliaNetworkDetails.linkAddress
         );
 
-        // Step 2) Deploy LockReleaseNFTPool.sol to Ronin Saigon
+        // Step 2) Deploy CCIPxRoninNFTGateway.sol to Ronin Saigon
         vm.selectFork(saigonFork);
         assertEq(vm.activeFork(), saigonFork);
 
@@ -103,14 +103,14 @@ contract LockReleaseNFTPoolTest is Test {
             "Sanity check: Saigon chain selector should be 13116810400804392105"
         );
 
-        saigonPoolERC721 = new LockReleaseNFTPool(
+        saigonPoolERC721 = new CCIPxRoninNFTGateway(
             saigonNetworkDetails.routerAddress,
             RONIN_GATEWAY_V3,
             RONIN_NFT_ERC721,
             saigonNetworkDetails.chainSelector,
             saigonNetworkDetails.linkAddress
         );
-        saigonPoolERC1155 = new LockReleaseNFTPool(
+        saigonPoolERC1155 = new CCIPxRoninNFTGateway(
             saigonNetworkDetails.routerAddress,
             RONIN_GATEWAY_V3,
             RONIN_NFT_ERC1155,
@@ -142,7 +142,7 @@ contract LockReleaseNFTPoolTest is Test {
 
         saigonPoolERC721.enableChain(sepoliaNetworkDetails.chainSelector, address(sepoliaPoolERC721), extraArgs);
 
-        // Step 5) On Ronin Saigon, fund LockReleaseNFTPool.sol with 3 LINK
+        // Step 5) On Ronin Saigon, fund CCIPxRoninNFTGateway.sol with 3 LINK
         assertEq(vm.activeFork(), saigonFork);
 
         ccipLocalSimulatorFork.requestLinkFromFaucet(alice, 3 ether);
@@ -158,7 +158,7 @@ contract LockReleaseNFTPoolTest is Test {
 
         // Step 7) On Ronin Saigon, crossChainTransfer ERC721
         saigonPoolERC721.crossChainTransfer(
-            address(bob), id, 0, sepoliaNetworkDetails.chainSelector, ILockReleaseNFTPool.PayFeesIn.LINK
+            address(bob), id, 0, sepoliaNetworkDetails.chainSelector, ICCIPxRoninNFTGateway.PayFeesIn.LINK
         );
 
         vm.stopPrank();
@@ -196,7 +196,7 @@ contract LockReleaseNFTPoolTest is Test {
 
         saigonPoolERC721.enableChain(sepoliaNetworkDetails.chainSelector, address(sepoliaPoolERC721), extraArgs);
 
-        // Step 5) On Ronin Saigon, fund LockReleaseNFTPool.sol with 3 LINK
+        // Step 5) On Ronin Saigon, fund CCIPxRoninNFTGateway.sol with 3 LINK
         assertEq(vm.activeFork(), saigonFork);
 
         ccipLocalSimulatorFork.requestLinkFromFaucet(alice, 3 ether);
@@ -212,7 +212,7 @@ contract LockReleaseNFTPoolTest is Test {
 
         // Step 7) On Ronin Saigon, crossChainTransfer ERC721
         saigonPoolERC721.crossChainTransfer(
-            address(bob), id, 0, sepoliaNetworkDetails.chainSelector, ILockReleaseNFTPool.PayFeesIn.LINK
+            address(bob), id, 0, sepoliaNetworkDetails.chainSelector, ICCIPxRoninNFTGateway.PayFeesIn.LINK
         );
 
         vm.stopPrank();
@@ -248,7 +248,7 @@ contract LockReleaseNFTPoolTest is Test {
         AccessControlEnumerable(SEPOLIA_NFT_ERC1155).grantRole(keccak256("MINTER_ROLE"), address(sepoliaPoolERC1155));
         IERC1155Mintable(SEPOLIA_NFT_ERC1155).mint(MAINCHAIN_GATEWAY_V3, id, 100, "");
         vm.stopPrank();
-        
+
         vm.prank(MAINCHAIN_GATEWAY_V3);
         IERC1155Mintable(SEPOLIA_NFT_ERC1155).setApprovalForAll(address(sepoliaPoolERC1155), true);
 
@@ -258,7 +258,7 @@ contract LockReleaseNFTPoolTest is Test {
 
         saigonPoolERC1155.enableChain(sepoliaNetworkDetails.chainSelector, address(sepoliaPoolERC1155), extraArgs);
 
-        // Step 5) On Ronin Saigon, fund LockReleaseNFTPool.sol with 3 LINK
+        // Step 5) On Ronin Saigon, fund CCIPxRoninNFTGateway.sol with 3 LINK
         assertEq(vm.activeFork(), saigonFork);
 
         ccipLocalSimulatorFork.requestLinkFromFaucet(alice, 3 ether);
@@ -275,7 +275,7 @@ contract LockReleaseNFTPoolTest is Test {
 
         // Step 7) On Ronin Saigon, crossChainTransfer ERC1155
         saigonPoolERC1155.crossChainTransfer(
-            address(bob), id, 200, sepoliaNetworkDetails.chainSelector, ILockReleaseNFTPool.PayFeesIn.LINK
+            address(bob), id, 200, sepoliaNetworkDetails.chainSelector, ICCIPxRoninNFTGateway.PayFeesIn.LINK
         );
 
         vm.stopPrank();
@@ -316,7 +316,7 @@ contract LockReleaseNFTPoolTest is Test {
 
         saigonPoolERC1155.enableChain(sepoliaNetworkDetails.chainSelector, address(sepoliaPoolERC1155), extraArgs);
 
-        // Step 5) On Ronin Saigon, fund LockReleaseNFTPool.sol with 3 LINK
+        // Step 5) On Ronin Saigon, fund CCIPxRoninNFTGateway.sol with 3 LINK
         assertEq(vm.activeFork(), saigonFork);
 
         ccipLocalSimulatorFork.requestLinkFromFaucet(alice, 3 ether);
@@ -334,7 +334,7 @@ contract LockReleaseNFTPoolTest is Test {
 
         // Step 7) On Ronin Saigon, crossChainTransfer ERC1155
         saigonPoolERC1155.crossChainTransfer(
-            address(bob), id, 100, sepoliaNetworkDetails.chainSelector, ILockReleaseNFTPool.PayFeesIn.LINK
+            address(bob), id, 100, sepoliaNetworkDetails.chainSelector, ICCIPxRoninNFTGateway.PayFeesIn.LINK
         );
 
         vm.stopPrank();
@@ -350,6 +350,60 @@ contract LockReleaseNFTPoolTest is Test {
         assertEq(vm.activeFork(), sepoliaFork);
 
         assertEq(IERC1155Mintable(SEPOLIA_NFT_ERC1155).balanceOf(bob, id), 100, "NFT should be transferred to Bob");
+    }
+
+    function testFork_CanBridge_ERC721_From_Saigon_To_Sepolia_TransferFromIfOwnedByGateway() public {
+        uint256 id = vm.unixTime();
+
+        // Step 3) On Ethereum Sepolia, call enableChain function
+        vm.selectFork(sepoliaFork);
+        assertEq(vm.activeFork(), sepoliaFork);
+
+        encodeExtraArgs = new EncodeExtraArgs();
+
+        uint256 gasLimit = 200_000;
+        bytes memory extraArgs = encodeExtraArgs.encode(gasLimit);
+        assertEq(extraArgs, hex"97a657c90000000000000000000000000000000000000000000000000000000000030d40"); // value taken from https://cll-devrel.gitbook.io/ccip-masterclass-3/ccip-masterclass/exercise-ERC721#step-3-on-ethereum-sepolia-call-enablechain-function
+
+        sepoliaPoolERC721.enableChain(saigonNetworkDetails.chainSelector, address(saigonPoolERC721), extraArgs);
+        IERC721Mintable(SEPOLIA_NFT_ERC721).mint(address(sepoliaPoolERC721), id);
+
+        // Step 4) On Ronin Saigon, call enableChain function
+        vm.selectFork(saigonFork);
+        assertEq(vm.activeFork(), saigonFork);
+
+        saigonPoolERC721.enableChain(sepoliaNetworkDetails.chainSelector, address(sepoliaPoolERC721), extraArgs);
+
+        // Step 5) On Ronin Saigon, fund CCIPxRoninNFTGateway.sol with 3 LINK
+        assertEq(vm.activeFork(), saigonFork);
+
+        ccipLocalSimulatorFork.requestLinkFromFaucet(alice, 3 ether);
+
+        // Step 6) On Ronin Saigon, mint new ERC721
+        assertEq(vm.activeFork(), saigonFork);
+
+        IERC721Mintable(RONIN_NFT_ERC721).mint(alice, id);
+
+        vm.startPrank(alice);
+        IERC20(saigonNetworkDetails.linkAddress).approve(address(saigonPoolERC721), 3 ether);
+        IERC721Mintable(RONIN_NFT_ERC721).approve(address(saigonPoolERC721), id);
+
+        // Step 7) On Ronin Saigon, crossChainTransfer ERC721
+        saigonPoolERC721.crossChainTransfer(
+            address(bob), id, 0, sepoliaNetworkDetails.chainSelector, ICCIPxRoninNFTGateway.PayFeesIn.LINK
+        );
+
+        vm.stopPrank();
+
+        assertEq(
+            IERC721Mintable(RONIN_NFT_ERC721).ownerOf(id), address(saigonPoolERC721), "NFT should be locked in the pool"
+        );
+
+        // On Ethereum Sepolia, check if ERC721 was successfully transferred
+        ccipLocalSimulatorFork.switchChainAndRouteMessage(sepoliaFork); // THIS LINE REPLACES CHAINLINK CCIP DONs, DO NOT FORGET IT
+        assertEq(vm.activeFork(), sepoliaFork);
+
+        assertEq(IERC721Mintable(SEPOLIA_NFT_ERC721).ownerOf(id), bob, "NFT should be transferred to Bob");
     }
 
     function testFork_CanBridge_ERC721_From_Saigon_To_Sepolia_MintWhenIdIsMissing() public {
@@ -371,7 +425,7 @@ contract LockReleaseNFTPoolTest is Test {
 
         saigonPoolERC721.enableChain(sepoliaNetworkDetails.chainSelector, address(sepoliaPoolERC721), extraArgs);
 
-        // Step 5) On Ronin Saigon, fund LockReleaseNFTPool.sol with 3 LINK
+        // Step 5) On Ronin Saigon, fund CCIPxRoninNFTGateway.sol with 3 LINK
         assertEq(vm.activeFork(), saigonFork);
 
         ccipLocalSimulatorFork.requestLinkFromFaucet(alice, 3 ether);
@@ -388,7 +442,7 @@ contract LockReleaseNFTPoolTest is Test {
 
         // Step 7) On Ronin Saigon, crossChainTransfer ERC721
         saigonPoolERC721.crossChainTransfer(
-            address(bob), id, 0, sepoliaNetworkDetails.chainSelector, ILockReleaseNFTPool.PayFeesIn.LINK
+            address(bob), id, 0, sepoliaNetworkDetails.chainSelector, ICCIPxRoninNFTGateway.PayFeesIn.LINK
         );
 
         vm.stopPrank();

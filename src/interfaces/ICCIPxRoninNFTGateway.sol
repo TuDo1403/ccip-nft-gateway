@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
 import {IAny2EVMMessageReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IAny2EVMMessageReceiver.sol";
 
-interface ILockReleaseNFTPool is IAny2EVMMessageReceiver {
+interface ICCIPxRoninNFTGateway is IAny2EVMMessageReceiver {
     error ChainNotEnabled(uint64 chainSelector);
     error InvalidNFT(address expected, address actual);
     error InvalidRouter(address expected, address actual);
