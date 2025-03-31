@@ -13,16 +13,7 @@ remappings = [
 ]
 
 [rpc_endpoints]
-ethereumSepolia = "${ETHEREUM_SEPOLIA_RPC_URL}"
-optimismSepolia = "${OPTIMISM_SEPOLIA_RPC_URL}"
-arbitrumSepolia = "${ARBITRUM_SEPOLIA_RPC_URL}"
-avalancheFuji = "${AVALANCHE_FUJI_RPC_URL}"
-polygonAmoy = "${POLYGON_AMOY_RPC_URL}"
-bnbChainTestnet = "${BNB_CHAIN_TESTNET_RPC_URL}"
-baseSepolia = "${BASE_SEPOLIA_RPC_URL}"
-kromaSepolia = "${KROMA_SEPOLIA_RPC_URL}"
-wemixTestnet = "${WEMIX_TESTNET_RPC_URL}"
-gnosisChiado = "${GNOSIS_CHIADO_RPC_URL}"
-celoAlfajores = "${CELO_ALFAJORES_RPC_URL}"
+sepolia = "https://sepolia.infura.io/v3/${INFURA_API_KEY}"
+ronin-testnet = "https://saigon-archive.roninchain.com/rpc"
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
