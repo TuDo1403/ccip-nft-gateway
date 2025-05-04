@@ -1,29 +1,29 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
+import {RateLimiter} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/RateLimiter.sol";
 import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
 import {IAny2EVMMessageReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IAny2EVMMessageReceiver.sol";
 
 interface IERC721TokenPool is IAny2EVMMessageReceiver {
-    error ChainNotEnabled(uint64 chainSelector);
-    error InvalidNFT(address expected, address actual);
-    error NFTLockFailed(address from, address to, uint256 tokenId, uint256 quantity);
-    error NFTReleaseFailed(address from, address to, uint256 tokenId, uint256 quantity);
-    error OnlyOtherChain(uint64 chainSelector);
-    error SenderNotEnabled(uint64 chainSelector, address sender);
-    error RefundFailed(address to, uint256 amount);
-    error InsufficientBalance(PayFeesIn feeKind, uint256 currentBalance, uint256 requiredBalance);
+    error Unauthorized(address sender);
+    error ExceedsTransferLimit(uint256 requested, uint256 limit);
+    error ZeroIdsNotAllowed();
+    error PoolAlreadyAdded(uint64 chainSelector, address pool);
+    error NFTDeliveryFailed(address holder, uint256 id);
+    error MintFailed(uint256 id);
+    error TokenNotERC721();
 
-    enum PayFeesIn {
-        Native,
-        LINK
-    }
-
-    event Refunded(address indexed to, uint256 amount);
+    event ExternalStorageUpdated(address indexed by, address indexed extStorage);
+    event ChainConfigured(
+        address indexed by,
+        uint64 indexed chainSelector,
+        RateLimiter.Config outboundConfig,
+        RateLimiter.Config inboundConfig
+    );
     event ChainDisabled(uint64 indexed chainSelector);
-    event ChainEnabled(uint64 indexed chainSelector, address indexed pool, bytes extraArgs);
+    event ChainEnabled(uint64 indexed chainSelector, address indexed pool);
     event RateLimitAdminSet(address indexed by, address rateLimitAdmin);
-
     event CrossChainReceived(
         address indexed from, address indexed to, uint256[] ids, uint64 srcChainSelector, uint64 dstChainSelector
     );
@@ -31,15 +31,29 @@ interface IERC721TokenPool is IAny2EVMMessageReceiver {
         address indexed from, address indexed to, uint256[] ids, uint64 srcChainSelector, uint64 dstChainSelector
     );
 
-    function initialize(address owned, address router, address token, uint64 currentChainSelector) external;
+    struct RemoteChainConfig {
+        address _pool;
+        uint32 _transferLimitPerRequest;
+        RateLimiter.TokenBucket _outboundRateLimiterConfig;
+        RateLimiter.TokenBucket _inboundRateLimiterConfig;
+    }
 
-    function addRemotePool(uint64 remoteChainSelector, address pool, bytes calldata extraArgs) external;
+    function initialize(
+        address owned,
+        address router,
+        address token,
+        uint64 currentChainSelector,
+        uint64 fixedGas,
+        uint64 dynamicGas
+    ) external;
+
+    function addRemotePool(uint64 remoteChainSelector, address pool) external;
 
     function setRateLimitAdmin(address rateLimitAdmin) external;
 
     function setExternalStorage(address extStorage) external;
 
-    function setTransferLimitPerRequest(uint64 chainSelector, uint32 limit) external;
+    function setTransferLimitPerRequest(uint64 chainSelector, uint16 limit) external;
 
     // function crossChainTransfer(
     //     address to,

@@ -13,10 +13,13 @@ import {IRouterClientExtended} from "src/interfaces/IRouterClientExtended.sol";
 
 abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessageReceiver, IERC165 {
     error CursedByRMN();
+    error SenderNotEnabled(uint64 chainSelector, address sender);
+    error OnlyOtherChain(uint64 chainSelector);
     error ZeroAddressNotAllowed();
     error InvalidRouter(address expected, address actual);
     error InvalidArmProxy(address expected, address actual);
     error NativeFeeNotAllowed();
+    error NonExistentChain(uint64 chainSelector);
     error CurrentChainSelectorNotValid(uint64 currentChainSelector);
 
     event MessageSent(address indexed by, bytes32 indexed messageId);
@@ -29,6 +32,21 @@ abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessage
     IRouterClientExtended internal s_router;
 
     uint256[50] private __gap2;
+
+    modifier onlyEnabledSender(uint64 remoteChainSelector, address srcSender) {
+        _requireEnabledSender(remoteChainSelector, srcSender);
+        _;
+    }
+
+    modifier onlyEnabledChain(uint64 remoteChainSelector) {
+        _requireEnabledChain(remoteChainSelector);
+        _;
+    }
+
+    modifier onlyOtherChain(uint64 remoteChainSelector) {
+        _requireOtherChain(remoteChainSelector);
+        _;
+    }
 
     modifier nonZero(address addr) {
         _requireNonZero(addr);
@@ -66,6 +84,8 @@ abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessage
         override
         onlyRouter
         notCursed(message.sourceChainSelector)
+        onlyEnabledChain(message.sourceChainSelector)
+        onlyEnabledSender(message.sourceChainSelector, abi.decode(message.sender, (address)))
     {
         _ccipReceive(message);
 
@@ -98,6 +118,10 @@ abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessage
         return interfaceId == type(IAny2EVMMessageReceiver).interfaceId || interfaceId == type(IERC165).interfaceId;
     }
 
+    function isSupportedChain(uint64 remoteChainSelector) public view virtual returns (bool);
+
+    function isSenderEnabled(uint64 remoteChainSelector, address srcSender) public view virtual returns (bool);
+
     /// @notice Override this function in your implementation.
     /// @param message Any2EVMMessage
     function _ccipReceive(Client.Any2EVMMessage memory message) internal virtual;
@@ -109,10 +133,27 @@ abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessage
         uint256 gasLimit,
         bytes memory data
     ) internal notCursed(destChainSelector) returns (bytes32 messageId) {
+        (uint256 fee, Client.EVM2AnyMessage memory message) =
+            _getSendDataFee(destChainSelector, receiver, feeToken, gasLimit, data);
+        feeToken.transferFrom(msg.sender, address(this), fee);
+        feeToken.approve(address(s_router), fee);
+
+        messageId = s_router.ccipSend(destChainSelector, message);
+
+        emit MessageSent(msg.sender, messageId);
+    }
+
+    function _getSendDataFee(
+        uint64 destChainSelector,
+        address receiver,
+        IERC20 feeToken,
+        uint256 gasLimit,
+        bytes memory data
+    ) internal view returns (uint256 fee, Client.EVM2AnyMessage memory message) {
         if (address(feeToken) == address(0)) revert NativeFeeNotAllowed();
 
         Client.EVMTokenAmount[] memory tokenAmounts = new Client.EVMTokenAmount[](0);
-        Client.EVM2AnyMessage memory message = Client.EVM2AnyMessage({
+        message = Client.EVM2AnyMessage({
             receiver: abi.encode(receiver),
             data: data,
             tokenAmounts: tokenAmounts,
@@ -120,12 +161,11 @@ abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessage
             feeToken: address(feeToken)
         });
 
-        uint256 fee = s_router.getFee(destChainSelector, message);
-        feeToken.transferFrom(msg.sender, address(s_router), fee);
+        fee = s_router.getFee(destChainSelector, message);
+    }
 
-        messageId = s_router.ccipSend(destChainSelector, message);
-
-        emit MessageSent(msg.sender, messageId);
+    function _requireOtherChain(uint64 remoteChainSelector) internal view {
+        if (remoteChainSelector == s_currentChainSelector) revert OnlyOtherChain(remoteChainSelector);
     }
 
     function _requireRouter() internal view {
@@ -138,5 +178,13 @@ abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessage
 
     function _requireNotCursed(uint64 remoteChainSelector) internal view {
         if (s_rmnProxy.isCursed(bytes16(uint128(remoteChainSelector)))) revert CursedByRMN();
+    }
+
+    function _requireEnabledChain(uint64 remoteChainSelector) internal view {
+        if (!isSupportedChain(remoteChainSelector)) revert NonExistentChain(remoteChainSelector);
+    }
+
+    function _requireEnabledSender(uint64 remoteChainSelector, address srcSender) internal view {
+        if (!isSenderEnabled(remoteChainSelector, srcSender)) revert SenderNotEnabled(remoteChainSelector, srcSender);
     }
 }

@@ -13,7 +13,10 @@ remappings = [
 ]
 
 [rpc_endpoints]
-sepolia = "https://sepolia.infura.io/v3/${INFURA_API_KEY}"
-ronin-testnet = "https://saigon-archive.roninchain.com/rpc"
+sepolia = "${SEPOLIA_PRIVATE_RPC}"
+ronin-testnet = "${SAIGON_PRIVATE_RPC}"
+
+[fmt]
+line_length = 120
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
