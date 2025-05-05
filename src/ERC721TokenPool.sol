@@ -4,57 +4,76 @@ pragma solidity ^0.8.0;
 import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
 import {RateLimiter} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/RateLimiter.sol";
 
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
-import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {Ownable2StepUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import {ERC165Checker} from "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-import {IERC721Mintable} from "src/interfaces/ext/IERC721Mintable.sol";
-import {IExtStorage} from "src/interfaces/ext/IExtStorage.sol";
+import {IERC721Mintable} from "src/interfaces/external/IERC721Mintable.sol";
+import {IExtStorage} from "src/interfaces/external/IExtStorage.sol";
 import {IERC721TokenPool} from "src/interfaces/IERC721TokenPool.sol";
-import {CCIPCrossChainSenderReceiver} from "src/extensions/CCIPCrossChainSenderReceiver.sol";
+import {CCIPSenderReceiverUpgradeable} from "src/extensions/CCIPSenderReceiverUpgradeable.sol";
 
-contract ERC721TokenPool is CCIPCrossChainSenderReceiver, Pausable, Ownable2Step, IERC721TokenPool {
+contract ERC721TokenPool is
+    CCIPSenderReceiverUpgradeable,
+    PausableUpgradeable,
+    Ownable2StepUpgradeable,
+    IERC721TokenPool
+{
     using EnumerableSet for EnumerableSet.UintSet;
+    using EnumerableSet for EnumerableSet.AddressSet;
     using RateLimiter for RateLimiter.TokenBucket;
 
     uint256[50] private __gap;
 
     IERC721Mintable internal s_token;
-    IExtStorage internal s_extStorage;
     address internal s_rateLimitAdmin;
     uint64 internal s_fixedGas;
     uint64 internal s_dynamicGas;
 
+    EnumerableSet.AddressSet internal s_extStorages;
     EnumerableSet.UintSet internal s_remoteChainSelectors;
     mapping(uint64 remoteChainSelector => RemoteChainConfig remoteChainConfig) internal s_remoteChainConfigs;
 
-    constructor() Ownable(address(0xdead)) {
+    modifier validLength(uint256[] calldata ids) {
+        _requireValidLength(ids);
+        _;
+    }
+
+    constructor() {
         _disableInitializers();
     }
 
     function initialize(
         address owned,
         address router,
+        address rmnProxy,
         address token,
         uint64 currentChainSelector,
         uint64 fixedGas,
         uint64 dynamicGas
     ) external initializer nonZero(router) nonZero(token) {
         _transferOwnership(owned);
-        __CCIPCrossChainSenderReceiver_init(router, currentChainSelector);
-        if (!ERC165Checker.supportsInterface(token, type(IERC721).interfaceId)) revert TokenNotERC721();
+        __CCIPSenderReceiverUpgradeable_init(router, rmnProxy, currentChainSelector);
 
+        if (!ERC165Checker.supportsInterface(token, type(IERC721).interfaceId)) revert TokenNotERC721();
         s_token = IERC721Mintable(token);
-        s_fixedGas = fixedGas;
-        s_dynamicGas = dynamicGas;
+
+        _setGasLimitConfig(fixedGas, dynamicGas);
     }
 
-    function setExternalStorage(address extStorage) external onlyOwner {
-        s_extStorage = IExtStorage(extStorage);
-        emit ExternalStorageUpdated(msg.sender, extStorage);
+    function setExternalStorage(address extStorage, bool shouldAdd) external nonZero(extStorage) onlyOwner {
+        if (shouldAdd) {
+            if (s_extStorages.contains(extStorage)) revert ExtStorageAlreadyAdded(extStorage);
+            s_extStorages.add(extStorage);
+        } else {
+            if (!s_extStorages.contains(extStorage)) revert ExtStorageNotAdded(extStorage);
+            s_extStorages.remove(extStorage);
+        }
+
+        emit ExternalStorageUpdated(msg.sender, extStorage, shouldAdd);
     }
 
     function setRateLimitAdmin(address rateLimitAdmin) external onlyOwner {
@@ -63,8 +82,7 @@ contract ERC721TokenPool is CCIPCrossChainSenderReceiver, Pausable, Ownable2Step
     }
 
     function setGasLimitConfig(uint64 fixedGas, uint64 dynamicGas) external onlyOwner {
-        s_fixedGas = fixedGas;
-        s_dynamicGas = dynamicGas;
+        _setGasLimitConfig(fixedGas, dynamicGas);
     }
 
     /// @notice Sets the chain rate limiter config.
@@ -79,15 +97,6 @@ contract ERC721TokenPool is CCIPCrossChainSenderReceiver, Pausable, Ownable2Step
         if (msg.sender != s_rateLimitAdmin && msg.sender != owner()) revert Unauthorized(msg.sender);
 
         _setRateLimitConfig(remoteChainSelector, outboundConfig, inboundConfig);
-    }
-
-    function setTransferLimitPerRequest(uint64 remoteChainSelector, uint16 limit)
-        external
-        onlyOwner
-        onlyOtherChain(remoteChainSelector)
-        onlyEnabledChain(remoteChainSelector)
-    {
-        s_remoteChainConfigs[remoteChainSelector]._transferLimitPerRequest = limit;
     }
 
     function addRemotePool(uint64 remoteChainSelector, address pool)
@@ -120,30 +129,41 @@ contract ERC721TokenPool is CCIPCrossChainSenderReceiver, Pausable, Ownable2Step
     function crossBatchTransfer(address to, uint256[] calldata ids, uint64 remoteChainSelector, IERC20 feeToken)
         external
         nonZero(to)
+        validLength(ids)
         onlyOtherChain(remoteChainSelector)
         onlyEnabledChain(remoteChainSelector)
         returns (bytes32 messageId)
     {
-        uint256 tokenCount = ids.length;
-        uint256 limit = s_remoteChainConfigs[remoteChainSelector]._transferLimitPerRequest;
-        if (tokenCount > limit) revert ExceedsTransferLimit(tokenCount, limit);
-
-        if (tokenCount == 0) revert ZeroIdsNotAllowed();
-
         _lock({from: msg.sender, ids: ids});
         _requireDelivered(address(this), ids);
-        _consumeOutboundRateLimit(remoteChainSelector, tokenCount);
+        _consumeOutboundRateLimit(remoteChainSelector, ids.length);
 
         bytes memory data = abi.encode(msg.sender, to, ids);
         messageId = _sendDataPayFeeToken({
             destChainSelector: remoteChainSelector,
             receiver: s_remoteChainConfigs[remoteChainSelector]._pool,
             feeToken: feeToken,
-            gasLimit: s_fixedGas + s_dynamicGas * tokenCount,
+            gasLimit: estimateGasLimit(ids.length),
+            allowOutOfOrderExecution: true,
             data: data
         });
 
         emit CrossChainSent(msg.sender, to, ids, s_currentChainSelector, remoteChainSelector);
+    }
+
+    function getSupportedChains() external view returns (uint64[] memory chains) {
+        uint256[] memory values = s_remoteChainSelectors.values();
+        assembly ("memory-safe") {
+            chains := values
+        }
+    }
+
+    function getRemotePools() external view returns (address[] memory pools) {
+        uint256[] memory chainSelectors = s_remoteChainSelectors.values();
+        pools = new address[](chainSelectors.length);
+        for (uint256 i; i < chainSelectors.length; ++i) {
+            pools[i] = s_remoteChainConfigs[uint64(chainSelectors[i])]._pool;
+        }
     }
 
     function getFee(IERC20 feeToken, uint64 remoteChainSelector, uint256 tokenCount)
@@ -153,16 +173,18 @@ contract ERC721TokenPool is CCIPCrossChainSenderReceiver, Pausable, Ownable2Step
         onlyEnabledChain(remoteChainSelector)
         returns (uint256 fee)
     {
-        if (tokenCount == 0) revert ZeroIdsNotAllowed();
-        uint256[] memory ids = new uint256[](tokenCount);
-
         (fee,) = _getSendDataFee({
             destChainSelector: remoteChainSelector,
             receiver: s_remoteChainConfigs[remoteChainSelector]._pool,
             feeToken: feeToken,
-            gasLimit: s_fixedGas + s_dynamicGas * tokenCount,
-            data: abi.encode(address(0), address(0), ids)
+            gasLimit: estimateGasLimit(tokenCount),
+            allowOutOfOrderExecution: true,
+            data: abi.encode(address(0), address(0), new uint256[](tokenCount))
         });
+    }
+
+    function estimateGasLimit(uint256 tokenCount) public view returns (uint256 gasLimit) {
+        return s_fixedGas + s_dynamicGas * tokenCount;
     }
 
     function isSupportedChain(uint64 remoteChainSelector) public view override returns (bool) {
@@ -216,12 +238,19 @@ contract ERC721TokenPool is CCIPCrossChainSenderReceiver, Pausable, Ownable2Step
         return s_token;
     }
 
-    function getExternalStorage() external view returns (IExtStorage extStorage) {
-        return s_extStorage;
+    function getExternalStorages() external view returns (address[] memory extStorages) {
+        return s_extStorages.values();
     }
 
     function getSourcePool(uint64 remoteChainSelector) external view returns (address poolAddr) {
         return (s_remoteChainConfigs[remoteChainSelector]._pool);
+    }
+
+    function _setGasLimitConfig(uint64 fixedGas, uint64 dynamicGas) internal {
+        s_fixedGas = fixedGas;
+        s_dynamicGas = dynamicGas;
+
+        emit GasLimitConfigUpdated(msg.sender, fixedGas, dynamicGas);
     }
 
     function _setRateLimitConfig(
@@ -238,14 +267,16 @@ contract ERC721TokenPool is CCIPCrossChainSenderReceiver, Pausable, Ownable2Step
         emit ChainConfigured(msg.sender, remoteChainSelector, outboundConfig, inboundConfig);
     }
 
-    function _ccipReceive(Client.Any2EVMMessage memory message) internal virtual override {
+    function _ccipReceive(Client.Any2EVMMessage calldata message) internal virtual override {
         (address from, address to, uint256[] memory ids) = abi.decode(message.data, (address, address, uint256[]));
-        uint256 tokenCount = ids.length;
-        if (tokenCount == 0) revert ZeroIdsNotAllowed();
+
+        _requireValidLength(ids);
+        _requireNonZero(from);
+        _requireNonZero(to);
 
         _releaseOrMint(to, ids);
         _requireDelivered(to, ids);
-        _consumeInboundRateLimit(message.sourceChainSelector, tokenCount);
+        _consumeInboundRateLimit(message.sourceChainSelector, ids.length);
 
         emit CrossChainReceived(from, to, ids, message.sourceChainSelector, s_currentChainSelector);
     }
@@ -261,43 +292,62 @@ contract ERC721TokenPool is CCIPCrossChainSenderReceiver, Pausable, Ownable2Step
     }
 
     function _lock(address from, uint256[] calldata ids) internal {
-        for (uint256 i; i < ids.length; ++i) {
-            s_token.transferFrom(from, address(this), ids[i]);
+        IERC721 token = s_token;
+        uint256 tokenCount = ids.length;
+
+        for (uint256 i; i < tokenCount; ++i) {
+            token.transferFrom(from, address(this), ids[i]);
         }
     }
 
     function _releaseOrMint(address to, uint256[] memory ids) internal {
-        for (uint256 i; i < ids.length; ++i) {
-            uint256 id = ids[i];
+        uint256 tokenCount = ids.length;
+        address token = address(s_token);
+        address[] memory extStorages = s_extStorages.values();
+        uint256 extStorageCount = extStorages.length;
 
-            address owned = _tryGetOwnerOf(id);
-            if (owned == address(this)) {
-                // Transfer the token to the recipient
-                s_token.safeTransferFrom(address(this), to, id);
-            } else if (owned != address(0) && owned == address(s_extStorage)) {
-                s_token.safeTransferFrom(address(s_extStorage), to, id);
+        for (uint256 i; i < tokenCount; ++i) {
+            uint256 id = ids[i];
+            address owned = _tryGetOwnerOf(IERC721(token), id);
+
+            if (s_extStorages.contains(owned) || owned == address(this)) {
+                IERC721(token).safeTransferFrom(owned, to, id);
             } else {
-                try s_token.mint(to, id) {}
+                try IERC721Mintable(token).mint(to, id) {}
                 catch {
-                    if (address(s_extStorage) == address(0)) revert MintFailed(id);
-                    s_extStorage.mintFor(address(s_token), to, id);
+                    if (extStorageCount == 0) revert MintFailed(address(this), id, to);
+
+                    for (uint256 j; j < extStorageCount; ++j) {
+                        try IExtStorage(extStorages[i]).mintFor(token, to, id) {
+                            break;
+                        } catch {
+                            if (j == extStorageCount - 1) revert MintFailed(extStorages[i], id, to);
+                        }
+                    }
                 }
             }
         }
     }
 
-    function _requireDelivered(address holder, uint256[] memory ids) internal view {
-        for (uint256 i; i < ids.length; ++i) {
-            if (_tryGetOwnerOf(ids[i]) != holder) revert NFTDeliveryFailed(holder, ids[i]);
+    function _requireDelivered(address recipient, uint256[] memory ids) internal view {
+        uint256 tokenCount = ids.length;
+        IERC721 token = s_token;
+
+        for (uint256 i; i < tokenCount; ++i) {
+            if (_tryGetOwnerOf(token, ids[i]) != recipient) revert NFTDeliveryFailed(recipient, ids[i]);
         }
     }
 
-    function _tryGetOwnerOf(uint256 id) private view returns (address ownedBy) {
-        try s_token.ownerOf(id) returns (address by) {
-            ownedBy = by;
+    function _requireValidLength(uint256[] memory ids) internal pure {
+        if (ids.length == 0) revert ZeroIdsNotAllowed();
+    }
+
+    function _tryGetOwnerOf(IERC721 token, uint256 id) internal view returns (address ownedBy) {
+        try token.ownerOf(id) returns (address by) {
+            return by;
         } catch {
             // Handle the case where the token does not exist or is not an ERC721
-            ownedBy = address(0);
+            return address(0);
         }
     }
 }

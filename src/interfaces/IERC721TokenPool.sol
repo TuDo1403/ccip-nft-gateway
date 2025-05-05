@@ -10,11 +10,14 @@ interface IERC721TokenPool is IAny2EVMMessageReceiver {
     error ExceedsTransferLimit(uint256 requested, uint256 limit);
     error ZeroIdsNotAllowed();
     error PoolAlreadyAdded(uint64 chainSelector, address pool);
-    error NFTDeliveryFailed(address holder, uint256 id);
-    error MintFailed(uint256 id);
+    error ExtStorageAlreadyAdded(address extStorage);
+    error ExtStorageNotAdded(address extStorage);
+    error NFTDeliveryFailed(address recipient, uint256 id);
+    error MintFailed(address minter, uint256 id, address to);
     error TokenNotERC721();
 
-    event ExternalStorageUpdated(address indexed by, address indexed extStorage);
+    event GasLimitConfigUpdated(address indexed by, uint64 fixedGas, uint64 dynamicGas);
+    event ExternalStorageUpdated(address indexed by, address indexed extStorage, bool added);
     event ChainConfigured(
         address indexed by,
         uint64 indexed chainSelector,
@@ -33,7 +36,7 @@ interface IERC721TokenPool is IAny2EVMMessageReceiver {
 
     struct RemoteChainConfig {
         address _pool;
-        uint32 _transferLimitPerRequest;
+        address _token;
         RateLimiter.TokenBucket _outboundRateLimiterConfig;
         RateLimiter.TokenBucket _inboundRateLimiterConfig;
     }
@@ -41,6 +44,7 @@ interface IERC721TokenPool is IAny2EVMMessageReceiver {
     function initialize(
         address owned,
         address router,
+        address rmnProxy,
         address token,
         uint64 currentChainSelector,
         uint64 fixedGas,
@@ -51,9 +55,7 @@ interface IERC721TokenPool is IAny2EVMMessageReceiver {
 
     function setRateLimitAdmin(address rateLimitAdmin) external;
 
-    function setExternalStorage(address extStorage) external;
-
-    function setTransferLimitPerRequest(uint64 chainSelector, uint16 limit) external;
+    function setExternalStorage(address extStorage, bool shouldAdd) external;
 
     // function crossChainTransfer(
     //     address to,

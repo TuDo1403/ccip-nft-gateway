@@ -5,26 +5,14 @@ import {IRMN} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IRMN.sol"
 import {IAny2EVMMessageReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IAny2EVMMessageReceiver.sol";
 import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
 
-import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {IRouterClientExtended} from "src/interfaces/IRouterClientExtended.sol";
+import {ICCIPSenderReceiver} from "src/interfaces/extensions/ICCIPSenderReceiver.sol";
 
-abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessageReceiver, IERC165 {
-    error CursedByRMN();
-    error SenderNotEnabled(uint64 chainSelector, address sender);
-    error OnlyOtherChain(uint64 chainSelector);
-    error ZeroAddressNotAllowed();
-    error InvalidRouter(address expected, address actual);
-    error InvalidArmProxy(address expected, address actual);
-    error NativeFeeNotAllowed();
-    error NonExistentChain(uint64 chainSelector);
-    error CurrentChainSelectorNotValid(uint64 currentChainSelector);
-
-    event MessageSent(address indexed by, bytes32 indexed messageId);
-    event MessageReceived(address indexed by, bytes32 indexed messageId);
-
+abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderReceiver {
     uint256[50] private __gap1;
 
     uint64 internal s_currentChainSelector;
@@ -63,19 +51,20 @@ abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessage
         _;
     }
 
-    function __CCIPCrossChainSenderReceiver_init(address router, uint64 currentChainSelector) internal {
-        __CCIPCrossChainSenderReceiver_init_unchained(router, currentChainSelector);
+    function __CCIPSenderReceiverUpgradeable_init(address router, address rmnProxy, uint64 currentChainSelector)
+        internal
+    {
+        __CCIPSenderReceiverUpgradeable_init_unchained(router, rmnProxy, currentChainSelector);
     }
 
-    function __CCIPCrossChainSenderReceiver_init_unchained(address router, uint64 currentChainSelector)
-        internal
-        nonZero(router)
-        onlyInitializing
-    {
+    function __CCIPSenderReceiverUpgradeable_init_unchained(
+        address router,
+        address rmnProxy,
+        uint64 currentChainSelector
+    ) internal nonZero(router) nonZero(rmnProxy) onlyInitializing {
         s_router = IRouterClientExtended(router);
-        s_rmnProxy = IRMN(s_router.getArmProxy());
+        s_rmnProxy = IRMN(rmnProxy);
         s_currentChainSelector = currentChainSelector;
-        if (s_router.isChainSupported(currentChainSelector)) revert CurrentChainSelectorNotValid(currentChainSelector);
     }
 
     /// @inheritdoc IAny2EVMMessageReceiver
@@ -104,16 +93,18 @@ abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessage
         return s_rmnProxy;
     }
 
-    /// @notice IERC165 supports an interfaceId
-    /// @param interfaceId The interfaceId to check
-    /// @return true if the interfaceId is supported
-    /// @dev Should indicate whether the contract implements IAny2EVMMessageReceiver
-    /// e.g. return interfaceId == type(IAny2EVMMessageReceiver).interfaceId || interfaceId == type(IERC165).interfaceId
-    /// This allows CCIP to check if ccipReceive is available before calling it.
-    /// If this returns false or reverts, only tokens are transferred to the receiver.
-    /// If this returns true, tokens are transferred and ccipReceive is called atomically.
-    /// Additionally, if the receiver address does not have code associated with
-    /// it at the time of execution (EXTCODESIZE returns 0), only tokens will be transferred.
+    /**
+     * @notice IERC165 supports an interfaceId
+     * @param interfaceId The interfaceId to check
+     * @return true if the interfaceId is supported
+     * @dev Should indicate whether the contract implements IAny2EVMMessageReceiver
+     * e.g. return interfaceId == type(IAny2EVMMessageReceiver).interfaceId || interfaceId == type(IERC165).interfaceId
+     * This allows CCIP to check if ccipReceive is available before calling it.
+     * If this returns false or reverts, only tokens are transferred to the receiver.
+     * If this returns true, tokens are transferred and ccipReceive is called atomically.
+     * Additionally, if the receiver address does not have code associated with
+     * it at the time of execution (EXTCODESIZE returns 0), only tokens will be transferred.
+     */
     function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
         return interfaceId == type(IAny2EVMMessageReceiver).interfaceId || interfaceId == type(IERC165).interfaceId;
     }
@@ -124,17 +115,18 @@ abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessage
 
     /// @notice Override this function in your implementation.
     /// @param message Any2EVMMessage
-    function _ccipReceive(Client.Any2EVMMessage memory message) internal virtual;
+    function _ccipReceive(Client.Any2EVMMessage calldata message) internal virtual;
 
     function _sendDataPayFeeToken(
         uint64 destChainSelector,
         address receiver,
         IERC20 feeToken,
         uint256 gasLimit,
+        bool allowOutOfOrderExecution,
         bytes memory data
     ) internal notCursed(destChainSelector) returns (bytes32 messageId) {
         (uint256 fee, Client.EVM2AnyMessage memory message) =
-            _getSendDataFee(destChainSelector, receiver, feeToken, gasLimit, data);
+            _getSendDataFee(destChainSelector, receiver, feeToken, gasLimit, allowOutOfOrderExecution, data);
         feeToken.transferFrom(msg.sender, address(this), fee);
         feeToken.approve(address(s_router), fee);
 
@@ -148,6 +140,7 @@ abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessage
         address receiver,
         IERC20 feeToken,
         uint256 gasLimit,
+        bool allowOutOfOrderExecution,
         bytes memory data
     ) internal view returns (uint256 fee, Client.EVM2AnyMessage memory message) {
         if (address(feeToken) == address(0)) revert NativeFeeNotAllowed();
@@ -157,7 +150,9 @@ abstract contract CCIPCrossChainSenderReceiver is Initializable, IAny2EVMMessage
             receiver: abi.encode(receiver),
             data: data,
             tokenAmounts: tokenAmounts,
-            extraArgs: Client._argsToBytes(Client.EVMExtraArgsV1({gasLimit: gasLimit})),
+            extraArgs: Client._argsToBytes(
+                Client.EVMExtraArgsV2({gasLimit: gasLimit, allowOutOfOrderExecution: allowOutOfOrderExecution})
+            ),
             feeToken: address(feeToken)
         });
 

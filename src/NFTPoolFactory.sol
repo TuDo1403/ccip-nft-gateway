@@ -3,130 +3,82 @@ pragma solidity ^0.8.0;
 
 import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
 
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {AccessControlEnumerableUpgradeable} from
+    "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IBeacon} from "@openzeppelin/contracts/proxy/beacon/IBeacon.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-import {CCIPCrossChainSenderReceiver} from "src/extensions/CCIPCrossChainSenderReceiver.sol";
-import {IOwnable} from "src/interfaces/ext/IOwnable.sol";
+import {CCIPSenderReceiverUpgradeable} from "src/extensions/CCIPSenderReceiverUpgradeable.sol";
+import {IOwnable} from "src/interfaces/external/IOwnable.sol";
 import {IERC721TokenPool} from "src/interfaces/IERC721TokenPool.sol";
+import {INFTPoolFactory} from "src/interfaces/INFTPoolFactory.sol";
+import {INFTPoolCallback} from "src/interfaces/INFTPoolCallback.sol";
 
-contract NFTPoolFactory is CCIPCrossChainSenderReceiver, Pausable, AccessControlEnumerable {
+contract NFTPoolFactory is
+    PausableUpgradeable,
+    AccessControlEnumerableUpgradeable,
+    CCIPSenderReceiverUpgradeable,
+    INFTPoolFactory
+{
     using Clones for address;
     using EnumerableSet for EnumerableSet.UintSet;
-
-    error PredictAddressNotMatch(address expected, address actual);
-    error PoolTypeNotSupported(PoolType poolType);
-    error InvalidTransferLimitPerRequest();
-    error CurrentChainSelectorNotMatch(uint64 currentChainSelector);
-    error FactoryAlreadyAdded(uint64 chainSelector, address pool);
-
-    enum PoolType {
-        ERC721
-    }
-
-    struct DeployConfig {
-        address pool;
-        address token;
-        uint64 chainSelector;
-        uint16 limitTransferPerRequest;
-    }
+    using EnumerableSet for EnumerableSet.AddressSet;
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
+    /// @dev Reserved slots for upgradeability
     uint256[50] private __gap;
 
-    uint64 internal s_deployGasLimit;
-    uint64 internal s_defaultFixedGas;
-    uint64 internal s_defaultDynamicGas;
-    address internal s_erc721PoolBeaconProxy;
-    IBeacon internal s_erc721PoolUpgradeableBeacon;
+    EnumerableSet.AddressSet internal s_deployedPools;
     EnumerableSet.UintSet internal s_remoteChainSelectors;
+    // mapping(address creator => uint256 nonce) internal s_creatorNonces;
     mapping(uint64 remoteChainSelector => address factory) internal s_remoteFactories;
+    mapping(Standard std => mapping(PoolType pt => PoolConfig config)) internal s_poolConfigs;
+    mapping(uint64 chainSelector => mapping(address creator => uint256 nonce)) internal s_creatorNonces;
 
     constructor() {
         _disableInitializers();
     }
 
-    function initialize(
-        address admin,
-        address pauser,
-        address router,
-        uint64 currentChainSelector,
-        uint64 deployGasLimit,
-        uint64 defaultFixedGas,
-        uint64 defaultDynamicGas
-    ) external initializer {
-        __CCIPCrossChainSenderReceiver_init(router, currentChainSelector);
+    function initialize(address admin, address router, address rmnProxy, uint64 currentChainSelector)
+        external
+        initializer
+    {
+        __CCIPSenderReceiverUpgradeable_init(router, rmnProxy, currentChainSelector);
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(PAUSER_ROLE, pauser);
-
-        s_deployGasLimit = deployGasLimit;
-        s_defaultFixedGas = defaultFixedGas;
-        s_defaultDynamicGas = defaultDynamicGas;
+        _grantRole(PAUSER_ROLE, admin);
     }
 
-    function setDeployGasLimit(uint64 deployGasLimit) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        s_deployGasLimit = deployGasLimit;
-    }
-
-    function setDefaultGasConfig(uint64 fixedGas, uint64 dynamicGas) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        s_defaultFixedGas = fixedGas;
-        s_defaultDynamicGas = dynamicGas;
-    }
-
-    function setERC721PoolBeaconData(address upgradeableBeacon, address beaconProxy)
+    function updatePoolConfig(Standard std, PoolType poolType, uint64 fixedGas, uint64 dynamicGas, address bluePrint)
         external
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
-        s_erc721PoolUpgradeableBeacon = IBeacon(upgradeableBeacon);
-        s_erc721PoolBeaconProxy = beaconProxy;
+        s_poolConfigs[std][poolType] = PoolConfig({fixedGas: fixedGas, dynamicGas: dynamicGas, bluePrint: bluePrint});
     }
 
-    function getDeployConfig(
-        PoolType poolType,
-        bytes32 salt,
-        address sender,
-        address token,
-        uint64 chainSelector,
-        uint16 limitTransferPerRequest
-    ) external view returns (DeployConfig memory) {
-        return DeployConfig({
-            pool: predictPoolAddress(poolType, salt, sender, chainSelector),
-            token: token,
-            chainSelector: chainSelector,
-            limitTransferPerRequest: limitTransferPerRequest
-        });
-    }
-
-    function getSalt(PoolType poolType, bytes32 senderSalt, address sender, uint64 chainSelector)
-        public
+    function _getSalt(Standard std, PoolType pt, address creator, uint64 chainSelector)
+        internal
         view
-        returns (bytes32)
+        returns (bytes32 salt)
     {
-        if (poolType != PoolType.ERC721) revert PoolTypeNotSupported(poolType);
-
-        return keccak256(
-            abi.encodePacked(
-                poolType, senderSalt, sender, chainSelector, s_erc721PoolUpgradeableBeacon.implementation().codehash
-            )
-        );
+        return keccak256(abi.encode(std, pt, creator, chainSelector, s_creatorNonces[chainSelector][creator]));
     }
 
-    function predictPoolAddress(PoolType poolType, bytes32 senderSalt, address sender, uint64 chainSelector)
+    function predictPool(Standard std, PoolType pt, address creator, uint64 chainSelector)
         public
         view
         returns (address)
     {
-        if (poolType != PoolType.ERC721) revert PoolTypeNotSupported(poolType);
-
-        return s_erc721PoolBeaconProxy.predictDeterministicAddress(getSalt(poolType, senderSalt, sender, chainSelector));
+        address deployer =
+            chainSelector == s_currentChainSelector ? address(this) : s_remoteFactories[chainSelector]._factory;
+        address bluePrint = s_poolConfigs[std][pt].bluePrint;
+        return Clones.predictDeterministicAddress(bluePrint, _getSalt(std, pt, creator, chainSelector), deployer);
     }
 
-    function getFee(IERC20 feeToken, uint64 remoteChainSelector)
+    function getFee(IERC20 feeToken, Standard std, PoolType pt, uint64 remoteChainSelector)
         external
         view
         onlyOtherChain(remoteChainSelector)
@@ -138,13 +90,13 @@ contract NFTPoolFactory is CCIPCrossChainSenderReceiver, Pausable, AccessControl
             destChainSelector: remoteChainSelector,
             receiver: s_remoteFactories[remoteChainSelector],
             feeToken: feeToken,
-            gasLimit: s_deployGasLimit,
+            gasLimit: s_poolConfigs[std][pt].deployGas,
+            allowOutOfOrderExecution: false,
             data: abi.encode(uint8(0), bytes32(0), address(0), empty, empty)
         });
     }
 
-    function deployERC721TokenPool(
-        bytes32 salt,
+    function deployPool(
         IERC20 feeToken,
         bool crossDeploy,
         DeployConfig calldata local,
@@ -157,21 +109,24 @@ contract NFTPoolFactory is CCIPCrossChainSenderReceiver, Pausable, AccessControl
         onlyEnabledChain(remote.chainSelector)
     {
         if (local.chainSelector != s_currentChainSelector) revert CurrentChainSelectorNotMatch(local.chainSelector);
+
         if (crossDeploy) {
-            address actual = predictPoolAddress(PoolType.ERC721, salt, msg.sender, remote.chainSelector);
+            address remoteDeployer = s_remoteFactories[remote.chainSelector]._factory;
+            address actual = predictPool(remote.std, remote.pt, remoteDeployer, local.chainSelector);
             if (remote.pool != actual) revert PredictAddressNotMatch(remote.pool, actual);
-            if (local.limitTransferPerRequest == 0) revert InvalidTransferLimitPerRequest();
+            _incrementNonce(local.chainSelector, remoteDeployer);
 
             _sendDataPayFeeToken({
                 destChainSelector: remote.chainSelector,
                 receiver: s_remoteFactories[remote.chainSelector],
                 feeToken: feeToken,
-                gasLimit: s_deployGasLimit,
-                data: abi.encode(PoolType.ERC721, salt, msg.sender, remote, local)
+                gasLimit: s_poolConfigs[remote.std][remote.pt].deployGas,
+                allowOutOfOrderExecution: false,
+                data: abi.encode(remote, local)
             });
         }
 
-        _deployERC721TokenPoolAndInit(salt, msg.sender, local, remote);
+        _deployPoolAndInit(local.chainSelector, local, remote);
     }
 
     function addRemoteFactory(uint64 remoteChainSelector, address factory)
@@ -209,48 +164,41 @@ contract NFTPoolFactory is CCIPCrossChainSenderReceiver, Pausable, AccessControl
         public
         view
         virtual
-        override(CCIPCrossChainSenderReceiver, AccessControlEnumerable)
+        override(AccessControlEnumerableUpgradeable, CCIPSenderReceiverUpgradeable)
         returns (bool)
     {
-        return AccessControlEnumerable.supportsInterface(interfaceId)
-            || CCIPCrossChainSenderReceiver.supportsInterface(interfaceId);
+        return super.supportsInterface(interfaceId);
     }
 
-    function _ccipReceive(Client.Any2EVMMessage memory message) internal virtual override whenNotPaused {
-        (PoolType poolType, bytes32 salt, address owner, DeployConfig memory local, DeployConfig memory remote) =
-            abi.decode(message.data, (PoolType, bytes32, address, DeployConfig, DeployConfig));
-
-        if (poolType != PoolType.ERC721) revert PoolTypeNotSupported(poolType);
-
-        _deployERC721TokenPoolAndInit(salt, owner, local, remote);
+    function _incrementNonce(uint64 chainSelector, address creator) internal {
+        s_creatorNonces[chainSelector][creator]++;
     }
 
-    function _deployERC721TokenPoolAndInit(
-        bytes32 salt,
-        address owner,
-        DeployConfig memory local,
-        DeployConfig memory remote
-    ) internal {
-        address actual =
-            s_erc721PoolBeaconProxy.cloneDeterministic(getSalt(PoolType.ERC721, salt, owner, s_currentChainSelector));
+    function _ccipReceive(Client.Any2EVMMessage calldata message) internal virtual override whenNotPaused {
+        (DeployConfig memory local, DeployConfig memory remote) = abi.decode(message.data, (DeployConfig, DeployConfig));
+        _deployPoolAndInit(message.sourceChainSelector, local, remote);
+    }
+
+    function _deployPoolAndInit(address srcChainSelector, DeployConfig memory local, DeployConfig memory remote)
+        internal
+    {
+        bytes32 salt = _getSalt(local.std, local.pt, msg.sender, srcChainSelector);
+        address actual = s_poolConfigs[local.std][local.pt].bluePrint.cloneDeterministic(salt);
         if (local.pool != actual) revert PredictAddressNotMatch(local.pool, actual);
-        if (remote.limitTransferPerRequest == 0) revert InvalidTransferLimitPerRequest();
+        _incrementNonce(srcChainSelector, msg.sender);
 
         // Initialize the localPool
-        IERC721TokenPool(local.pool).initialize(
+        INFTPoolCallback(local.pool).initialize(
             address(this),
             address(s_router),
+            address(s_rmnProxy),
             local.token,
-            s_currentChainSelector,
-            s_defaultFixedGas,
-            s_defaultDynamicGas
+            local.chainSelector,
+            local.dynamicGas,
+            local.fixedGas
         );
         if (remote.pool != address(0)) {
-            IERC721TokenPool(local.pool).addRemotePool(remote.chainSelector, remote.pool);
-            IERC721TokenPool(local.pool).setTransferLimitPerRequest(
-                remote.chainSelector, remote.limitTransferPerRequest
-            );
+            INFTPoolCallback(local.pool).addRemotePool(remote.chainSelector, remote.pool, remote.token);
         }
-        IOwnable(local.pool).transferOwnership(owner);
     }
 }

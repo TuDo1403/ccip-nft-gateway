@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {IExtStorage} from "src/interfaces/ext/IExtStorage.sol";
-import {IERC721Mintable} from "src/interfaces/ext/IERC721Mintable.sol";
+import {IExtStorage} from "src/interfaces/external/IExtStorage.sol";
+import {IERC721Mintable} from "src/interfaces/external/IERC721Mintable.sol";
 
 contract MockExtStorage is IExtStorage {
     function setApprovalForAll(address nft, address operator, bool approved) external {

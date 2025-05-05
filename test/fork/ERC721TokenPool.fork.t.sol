@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
+import {CCIPLocalSimulatorFork, Register} from "@chainlink/local/src/ccip/CCIPLocalSimulatorFork.sol";
+
 import {Test} from "forge-std/Test.sol";
 import {console} from "forge-std/console.sol";
-import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
-import {NFTPoolFactory} from "src/NFTPoolFactory.sol";
+
 import {IERC721TokenPool, ERC721TokenPool} from "src/ERC721TokenPool.sol";
-import {CCIPLocalSimulatorFork, Register} from "@chainlink/local/src/ccip/CCIPLocalSimulatorFork.sol";
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
-import {ERC721Mintable} from "test/mocks/ERC721Mintable.sol";
+import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-contract ERC721TokenPoolTest is Test {
+import {INFTPoolFactory, NFTPoolFactory} from "src/NFTPoolFactory.sol";
+
+import {ERC721Mintable} from "test/mocks/ERC721Mintable.sol";
+
+contract ERC721TokenPoolForkTest is Test {
     enum Scenario {
         OwnedByPool,
         OwnedByExternalStorage,
@@ -68,7 +72,7 @@ contract ERC721TokenPoolTest is Test {
                 0xA959726154953bAe111746E265E6d754F48570E6, // wrappedNativeAddress
                 0x88DD2416699Bad3AeC58f535BC66F7f62DE2B2EC, // ccipBnMAddress
                 0x04B1F917a3ba69Fa252564414DdAFc82fA1B5178, // ccipLnMAddress
-                0xceA253a8c2BB995054524d071498281E89aACD59, // rmnProxyAddress
+                0xf206c6D3f3810eBbD75e7B4684291b5e51023D2f, // rmnProxyAddress
                 0x5055DA89A16b71fEF91D1af323b139ceDe2d8320, // registryModuleOwnerCustomAddress
                 0x90e83d532A4aD13940139c8ACE0B93b0DdbD323a // tokenAdminRegistryAddress
             )
@@ -95,7 +99,16 @@ contract ERC721TokenPoolTest is Test {
                     admin,
                     abi.encodeCall(
                         NFTPoolFactory.initialize,
-                        (admin, pauser, rmNwDts.routerAddress, rmNwDts.chainSelector, 1_000_000, 100_000, 200_000)
+                        (
+                            admin,
+                            pauser,
+                            rmNwDts.routerAddress,
+                            rmNwDts.rmnProxyAddress,
+                            rmNwDts.chainSelector,
+                            1_000_000,
+                            100_000,
+                            200_000
+                        )
                     )
                 )
             )
@@ -130,7 +143,16 @@ contract ERC721TokenPoolTest is Test {
                     admin,
                     abi.encodeCall(
                         NFTPoolFactory.initialize,
-                        (admin, pauser, lcNwDts.routerAddress, lcNwDts.chainSelector, 1_000_000, 100_000, 200_000)
+                        (
+                            admin,
+                            pauser,
+                            lcNwDts.routerAddress,
+                            lcNwDts.rmnProxyAddress,
+                            lcNwDts.chainSelector,
+                            1_000_000,
+                            100_000,
+                            200_000
+                        )
                     )
                 )
             )
@@ -170,9 +192,9 @@ contract ERC721TokenPoolTest is Test {
         bytes32 salt = keccak256("salt");
         bool crossDeploy = true;
 
-        NFTPoolFactory.PoolType poolType = NFTPoolFactory.PoolType.ERC721;
-        local = lcFactory.getDeployConfig(poolType, salt, owner, address(lcNFT), lcNwDts.chainSelector, 10);
-        remote = lcFactory.getDeployConfig(poolType, salt, owner, address(rmNFT), rmNwDts.chainSelector, 10);
+        INFTPoolFactory.PoolType poolType = INFTPoolFactory.PoolType.ERC721;
+        local = lcFactory.getDeployConfig(poolType, salt, owner, address(lcNFT), lcNwDts.chainSelector);
+        remote = lcFactory.getDeployConfig(poolType, salt, owner, address(rmNFT), rmNwDts.chainSelector);
 
         IERC20 feeToken = IERC20(lcNwDts.linkAddress);
         uint256 fee = lcFactory.getFee(feeToken, remote.chainSelector);
@@ -214,28 +236,6 @@ contract ERC721TokenPoolTest is Test {
         return result;
     }
 
-    function testConcrete_RevertIf_ExceedsLimitTransferPerRequest() public {
-        (NFTPoolFactory.DeployConfig memory local, NFTPoolFactory.DeployConfig memory remote) = _deployDualPool();
-
-        address alice = makeAddr("alice");
-        address bob = makeAddr("bob");
-
-        vm.selectFork(localForkId);
-        uint256[] memory ids = _getIds(1, 11); // [1, 2, 3, ..., 11]
-        lcNFT.mintBatch(alice, ids);
-
-        IERC20 feeToken = IERC20(lcNwDts.wrappedNativeAddress);
-        uint256 fee = ERC721TokenPool(local.pool).getFee(feeToken, remote.chainSelector, ids.length);
-        deal(address(feeToken), alice, fee);
-
-        vm.startPrank(alice);
-        lcNFT.setApprovalForAll(local.pool, true);
-        feeToken.approve(local.pool, fee);
-        vm.expectRevert(abi.encodeWithSelector(IERC721TokenPool.ExceedsTransferLimit.selector, 11, 10));
-        ERC721TokenPool(local.pool).crossBatchTransfer(bob, ids, remote.chainSelector, feeToken);
-        vm.stopPrank();
-    }
-
     function testConcrete_SuccessWhen_ReleaseUsingExternalStorage() public {
         (NFTPoolFactory.DeployConfig memory local, NFTPoolFactory.DeployConfig memory remote) = _deployDualPool();
 
@@ -251,7 +251,7 @@ contract ERC721TokenPoolTest is Test {
         vm.prank(externalStorage);
         rmNFT.setApprovalForAll(remote.pool, true);
         vm.prank(owner);
-        ERC721TokenPool(remote.pool).setExternalStorage(externalStorage);
+        ERC721TokenPool(remote.pool).setExternalStorage(externalStorage, true);
 
         vm.selectFork(localForkId);
         lcNFT.mintBatch(alice, ids);
