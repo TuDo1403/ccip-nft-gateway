@@ -3,12 +3,13 @@ pragma solidity ^0.8.0;
 
 import {MockERC721} from "forge-std/mocks/MockERC721.sol";
 
-contract ERC721Mintable is MockERC721 {
+contract MockERC721Mintable is MockERC721 {
     mapping(address => bool) public canMint;
     bool public allowAll;
 
-    constructor() {
+    constructor(string memory _name, string memory _symbol) {
         allowAll = true;
+        initialize(_name, _symbol);
     }
 
     function setAllowAll(bool allow) external {

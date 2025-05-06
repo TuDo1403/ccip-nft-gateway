@@ -3,10 +3,11 @@ pragma solidity ^0.8.0;
 
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {IAny2EVMMessageReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IAny2EVMMessageReceiver.sol";
+import {Any2EVMAddress} from "src/libraries/Any2EVMAddress.sol";
 
 interface ICCIPSenderReceiver is IAny2EVMMessageReceiver, IERC165 {
     error CursedByRMN();
-    error SenderNotEnabled(uint64 chainSelector, bytes32 senderHash);
+    error SenderNotEnabled(uint64 chainSelector, Any2EVMAddress sender);
     error OnlyRemoteChain(uint64 chainSelector);
     error OnlyLocalChain(uint64 chainSelector);
     error ZeroAddressNotAllowed();
@@ -21,13 +22,13 @@ interface ICCIPSenderReceiver is IAny2EVMMessageReceiver, IERC165 {
 
     struct RemoteChainConfig {
         uint64 _chainSelector;
-        bytes _addr;
+        Any2EVMAddress _addr;
     }
 
     event Refunded(address indexed to, uint256 value);
     event MessageSent(address indexed by, bytes32 indexed messageId);
-    event MessageReceived(address indexed by, bytes32 indexed messageId);
+    event MessageReceived(Any2EVMAddress by, bytes32 indexed messageId);
 
     event RemoteChainDisabled(address indexed by, uint64 indexed chainSelector);
-    event RemoteChainEnabled(address indexed by, uint64 indexed chainSelector, bytes32 indexed addressHash);
+    event RemoteChainEnabled(address indexed by, uint64 indexed chainSelector, Any2EVMAddress addr);
 }

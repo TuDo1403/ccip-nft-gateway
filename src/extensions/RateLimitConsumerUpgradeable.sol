@@ -12,7 +12,7 @@ abstract contract RateLimitConsumerUpgradeable is AccessControlEnumerableUpgrade
     using RateLimiter for RateLimiter.Config;
     using RateLimiter for RateLimiter.TokenBucket;
 
-    bytes32 public constant RATE_LIMITER = keccak256("RATE_LIMITER");
+    bytes32 public constant RATE_LIMITER_ROLE = keccak256("RATE_LIMITER_ROLE");
 
     uint256[50] private __gap1;
 
@@ -26,7 +26,7 @@ abstract contract RateLimitConsumerUpgradeable is AccessControlEnumerableUpgrade
     }
 
     function __RateLimitConsumer_init_unchained(address rateLimiter) internal onlyInitializing {
-        _grantRole(RATE_LIMITER, rateLimiter);
+        _grantRole(RATE_LIMITER_ROLE, rateLimiter);
     }
 
     /**
@@ -39,7 +39,7 @@ abstract contract RateLimitConsumerUpgradeable is AccessControlEnumerableUpgrade
         uint64 remoteChainSelector,
         RateLimiter.Config memory outboundConfig,
         RateLimiter.Config memory inboundConfig
-    ) external onlyRole(RATE_LIMITER) {
+    ) external onlyRole(RATE_LIMITER_ROLE) {
         _setRateLimitConfig(remoteChainSelector, outboundConfig, inboundConfig);
     }
 

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
+import {Any2EVMAddress} from "src/libraries/Any2EVMAddress.sol";
+
 interface ILockMintERC721TokenPool {
     error LengthMismatch(uint256 expected, uint256 actual);
     error MintFailed(address minter, address to, uint256 id);
@@ -13,7 +15,7 @@ interface ILockMintERC721TokenPool {
     function updateExternalStorage(address extStorage, bool shouldAdd) external;
 
     event CrossTransfer(
-        bytes srcFrom,
+        Any2EVMAddress srcFrom,
         address indexed dstTo,
         bytes32 indexed messageId,
         uint256[] ids,

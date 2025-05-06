@@ -3,22 +3,26 @@ pragma solidity ^0.8.0;
 
 import {AccessControlEnumerableUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+
+import {PausableExtendedUpgradeable} from "src/extensions/PausableExtendedUpgradeable.sol";
 import {CCIPSenderReceiverUpgradeable} from "src/extensions/CCIPSenderReceiverUpgradeable.sol";
 import {ITokenPool} from "src/interfaces/pools/ITokenPool.sol";
+import {Any2EVMAddress} from "src/libraries/Any2EVMAddress.sol";
 
 abstract contract TokenPoolUpgradeable is
     AccessControlEnumerableUpgradeable,
+    PausableExtendedUpgradeable,
     CCIPSenderReceiverUpgradeable,
     ITokenPool
 {
-    bytes32 public constant TOKEN_POOL_OWNER = keccak256("TOKEN_POOL_OWNER");
+    bytes32 public constant TOKEN_POOL_OWNER_ROLE = keccak256("TOKEN_POOL_OWNER_ROLE");
 
     uint256[50] private __gap1;
 
     address internal s_token;
     uint32 internal s_fixedGas;
     uint32 internal s_dynamicGas;
-    mapping(uint64 remoteChainSelector => address remoteToken) internal s_remoteTokens;
+    mapping(uint64 remoteChainSelector => Any2EVMAddress remoteToken) internal s_remoteTokens;
 
     uint256[50] private __gap2;
 
@@ -36,8 +40,9 @@ abstract contract TokenPoolUpgradeable is
         address rmnProxy,
         uint64 currentChainSelector
     ) internal onlyInitializing {
-        _grantRole(TOKEN_POOL_OWNER, owner);
+        _grantRole(TOKEN_POOL_OWNER_ROLE, owner);
         __TokenPoolUpgradeable_init_unchained(token, fixedGas, dynamicGas);
+        __PausableExtendedUpgradeable_init(owner);
         __CCIPSenderReceiverUpgradeable_init(router, rmnProxy, currentChainSelector);
     }
 
@@ -50,20 +55,20 @@ abstract contract TokenPoolUpgradeable is
         _setGasLimitConfig(fixedGas, dynamicGas);
     }
 
-    function setGasLimitConfig(uint32 fixedGas, uint32 dynamicGas) external onlyRole(TOKEN_POOL_OWNER) {
+    function setGasLimitConfig(uint32 fixedGas, uint32 dynamicGas) external onlyRole(TOKEN_POOL_OWNER_ROLE) {
         _setGasLimitConfig(fixedGas, dynamicGas);
     }
 
-    function addRemotePool(uint64 remoteChainSelector, address pool, address token)
+    function addRemotePool(uint64 remoteChainSelector, Any2EVMAddress calldata pool, Any2EVMAddress calldata token)
         external
-        onlyRole(TOKEN_POOL_OWNER)
+        onlyRole(TOKEN_POOL_OWNER_ROLE)
     {
-        _addRemoteChain(remoteChainSelector, abi.encode(pool));
+        _addRemoteChain(remoteChainSelector, pool);
         s_remoteTokens[remoteChainSelector] = token;
         emit RemotePoolAdded(msg.sender, remoteChainSelector, pool, token);
     }
 
-    function removeRemotePool(uint64 remoteChainSelector) external onlyRole(TOKEN_POOL_OWNER) {
+    function removeRemotePool(uint64 remoteChainSelector) external onlyRole(TOKEN_POOL_OWNER_ROLE) {
         _removeRemoteChain(remoteChainSelector);
         delete s_remoteTokens[remoteChainSelector];
         emit RemotePoolRemoved(msg.sender, remoteChainSelector);
@@ -91,21 +96,21 @@ abstract contract TokenPoolUpgradeable is
         return token == address(s_token);
     }
 
-    function getRemotePool(uint64 remoteChainSelector) public view returns (address addr) {
-        return abi.decode(s_remoteChainConfigs[remoteChainSelector]._addr, (address));
+    function getRemotePool(uint64 remoteChainSelector) public view returns (Any2EVMAddress memory pool) {
+        return s_remoteChainConfigs[remoteChainSelector]._addr;
     }
 
-    function getRemoteToken(uint64 remoteChainSelector) public view returns (address token) {
+    function getRemoteToken(uint64 remoteChainSelector) public view returns (Any2EVMAddress memory token) {
         return s_remoteTokens[remoteChainSelector];
     }
 
-    function getRemotePools() external view returns (uint64[] memory remoteChainSelectors, address[] memory pools) {
-        remoteChainSelectors = getSupportedChains();
+    function getRemotePools() external view returns (RemoteChainConfig[] memory pools) {
+        uint64[] memory remoteChainSelectors = getSupportedChains();
         uint256 length = remoteChainSelectors.length;
-        pools = new address[](length);
+        pools = new RemoteChainConfig[](length);
 
         for (uint256 i; i < length; ++i) {
-            pools[i] = abi.decode(s_remoteChainConfigs[remoteChainSelectors[i]]._addr, (address));
+            pools[i] = s_remoteChainConfigs[remoteChainSelectors[i]];
         }
     }
 
@@ -121,6 +126,6 @@ abstract contract TokenPoolUpgradeable is
     }
 
     function _requireLocalToken(address token) internal view {
-        if (token != s_token) revert OnlyLocalToken(s_token, token);
+        if (!isSupportedToken(token)) revert OnlyLocalToken(s_token, token);
     }
 }

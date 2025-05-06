@@ -13,6 +13,7 @@ remappings = [
     '@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/',
     '@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/',
     '@chainlink/local/=lib/chainlink-local/',
+    '@solady/=lib/solady/src/',
 ]
 
 [rpc_endpoints]

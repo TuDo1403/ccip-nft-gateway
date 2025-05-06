@@ -5,7 +5,6 @@ import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.s
 
 import {AccessControlEnumerableUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
@@ -15,6 +14,7 @@ import {RateLimitConsumerUpgradeable} from "src/extensions/RateLimitConsumerUpgr
 import {IERC721Mintable} from "src/interfaces/external/IERC721Mintable.sol";
 import {IExtStorage} from "src/interfaces/external/IExtStorage.sol";
 import {ILockMintERC721TokenPool} from "src/interfaces/pools/erc721/ILockMintERC721TokenPool.sol";
+import {toAny, Any2EVMAddress} from "src/libraries/Any2EVMAddress.sol";
 
 contract LockMintERC721TokenPool is RateLimitConsumerUpgradeable, TokenPoolUpgradeable, ILockMintERC721TokenPool {
     using EnumerableSet for EnumerableSet.AddressSet;
@@ -35,18 +35,26 @@ contract LockMintERC721TokenPool is RateLimitConsumerUpgradeable, TokenPoolUpgra
         address router,
         address rmnProxy,
         uint64 currentChainSelector
-    ) external override initializer {
+    ) external initializer {
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
         __RateLimitConsumer_init(admin);
         __TokenPoolUpgradeable_init(admin, token, fixedGas, dynamicGas, router, rmnProxy, currentChainSelector);
     }
 
-    function crossBatchTransfer(address to, uint256[] calldata ids, uint64 remoteChainSelector, IERC20 feeToken)
-        external
-        nonZero(to)
-        returns (bytes32 messageId)
-    {
+    function withdrawLiquidity(address to, uint256[] calldata ids) external onlyRole(DEFAULT_ADMIN_ROLE) nonZero(to) {
+        uint256 tokenCount = ids.length;
+        for (uint256 i; i < tokenCount; ++i) {
+            IERC721(s_token).transferFrom(address(this), to, ids[i]);
+        }
+    }
+
+    function crossBatchTransfer(
+        uint64 remoteChainSelector,
+        Any2EVMAddress calldata to,
+        uint256[] calldata ids,
+        address feeToken
+    ) external returns (bytes32 messageId) {
         LockOrBurn memory lockOrBurn = LockOrBurn({
-            receiver: abi.encode(to),
             remoteChainSelector: remoteChainSelector,
             originalSender: msg.sender,
             amount: ids.length,
@@ -55,37 +63,35 @@ contract LockMintERC721TokenPool is RateLimitConsumerUpgradeable, TokenPoolUpgra
         });
         _lockOrBurn(lockOrBurn);
 
+        _requireNonZero(to);
+        ReleaseOrMint memory releaseOrMint = ReleaseOrMint({
+            originalSender: toAny(msg.sender),
+            remoteChainSelector: s_currentChainSelector,
+            receiver: to,
+            amount: lockOrBurn.amount,
+            localToken: getRemoteToken(remoteChainSelector),
+            remotePoolAddress: toAny(address(this)),
+            remotePoolData: lockOrBurn.extraData
+        });
         messageId = _sendDataPayFeeToken({
             remoteChainSelector: remoteChainSelector,
             receiver: getRemotePool(remoteChainSelector),
-            feeToken: feeToken,
+            data: abi.encode(releaseOrMint),
             gasLimit: estimateGasLimit(ids.length),
             allowOutOfOrderExecution: true,
-            data: abi.encode(
-                ReleaseOrMint({
-                    originalSender: abi.encode(msg.sender),
-                    remoteChainSelector: s_currentChainSelector,
-                    receiver: to,
-                    amount: lockOrBurn.amount,
-                    localToken: getRemoteToken(remoteChainSelector),
-                    remotePoolAddress: abi.encode(address(this)),
-                    remotePoolData: lockOrBurn.extraData
-                })
-            )
+            feeToken: feeToken
         });
     }
 
     function updateExternalStorage(address extStorage, bool shouldAdd)
         external
         nonZero(extStorage)
-        onlyRole(TOKEN_POOL_OWNER)
+        onlyRole(TOKEN_POOL_OWNER_ROLE)
     {
         if (shouldAdd) {
-            if (s_extStorages.contains(extStorage)) revert ExtStorageAlreadyAdded(extStorage);
-            s_extStorages.add(extStorage);
+            if (!s_extStorages.add(extStorage)) revert ExtStorageAlreadyAdded(extStorage);
         } else {
-            if (!s_extStorages.contains(extStorage)) revert ExtStorageNotAdded(extStorage);
-            s_extStorages.remove(extStorage);
+            if (!s_extStorages.remove(extStorage)) revert ExtStorageNotAdded(extStorage);
         }
 
         emit ExternalStorageUpdated(msg.sender, extStorage, shouldAdd);
@@ -101,20 +107,21 @@ contract LockMintERC721TokenPool is RateLimitConsumerUpgradeable, TokenPoolUpgra
         return interfaceId == type(ILockMintERC721TokenPool).interfaceId || super.supportsInterface(interfaceId);
     }
 
-    function estimateFee(IERC20 feeToken, uint64 remoteChainSelector, uint256 tokenCount)
+    function estimateFee(address feeToken, uint64 remoteChainSelector, uint256 tokenCount)
         external
         view
-        onlyRemoteChain(remoteChainSelector)
-        onlyEnabledChain(remoteChainSelector)
         returns (uint256 fee)
     {
+        ReleaseOrMint memory empty;
+        empty.remotePoolData = abi.encode(new uint256[](tokenCount));
+
         (fee,) = _getSendDataFee({
             remoteChainSelector: remoteChainSelector,
             receiver: getRemotePool(remoteChainSelector),
-            feeToken: feeToken,
+            data: abi.encode(empty),
             gasLimit: estimateGasLimit(tokenCount),
             allowOutOfOrderExecution: true,
-            data: abi.encode(address(0), address(0), new uint256[](tokenCount))
+            feeToken: feeToken
         });
     }
 
@@ -132,7 +139,7 @@ contract LockMintERC721TokenPool is RateLimitConsumerUpgradeable, TokenPoolUpgra
 
         emit CrossTransfer(
             releaseOrMint.originalSender,
-            releaseOrMint.receiver,
+            releaseOrMint.receiver.toEVM(),
             message.messageId,
             abi.decode(releaseOrMint.remotePoolData, (uint256[])),
             message.sourceChainSelector,
@@ -140,13 +147,7 @@ contract LockMintERC721TokenPool is RateLimitConsumerUpgradeable, TokenPoolUpgra
         );
     }
 
-    function _releaseOrMint(ReleaseOrMint memory releaseOrMint)
-        internal
-        virtual
-        override
-        nonZero(releaseOrMint.receiver)
-        onlyLocalToken(releaseOrMint.localToken)
-    {
+    function _releaseOrMint(ReleaseOrMint memory releaseOrMint) internal virtual override whenNotPaused {
         uint256[] memory ids = abi.decode(releaseOrMint.remotePoolData, (uint256[]));
         _requireNonZero(ids.length);
         _requireEqualLength(ids.length, releaseOrMint.amount);
@@ -154,36 +155,43 @@ contract LockMintERC721TokenPool is RateLimitConsumerUpgradeable, TokenPoolUpgra
         address[] memory extStorages = s_extStorages.values();
         uint256 extStorageCount = extStorages.length;
 
+        address receiver = releaseOrMint.receiver.toEVM();
+        address localToken = releaseOrMint.localToken.toEVM();
+
+        _requireNonZero(receiver);
+        _requireLocalToken(localToken);
+
         for (uint256 i; i < releaseOrMint.amount; ++i) {
             uint256 id = ids[i];
-            address owned = _tryGetOwnerOf(releaseOrMint.localToken, id);
+            address owned = _tryGetOwnerOf(localToken, id);
 
             if (s_extStorages.contains(owned) || owned == address(this)) {
-                IERC721(releaseOrMint.localToken).transferFrom(owned, releaseOrMint.receiver, id);
+                IERC721(localToken).transferFrom(owned, receiver, id);
             } else {
-                try IERC721Mintable(releaseOrMint.localToken).mint(releaseOrMint.receiver, id) {}
+                try IERC721Mintable(localToken).mint(receiver, id) {}
                 catch {
-                    if (extStorageCount == 0) revert MintFailed(address(this), releaseOrMint.receiver, id);
+                    if (extStorageCount == 0) revert MintFailed(address(this), receiver, id);
 
                     for (uint256 j; j < extStorageCount; ++j) {
-                        try IExtStorage(extStorages[i]).mintFor(releaseOrMint.localToken, releaseOrMint.receiver, id) {
+                        try IExtStorage(extStorages[i]).mintFor(localToken, receiver, id) {
                             break;
                         } catch {
-                            if (j == extStorageCount - 1) revert MintFailed(extStorages[i], releaseOrMint.receiver, id);
+                            if (j == extStorageCount - 1) revert MintFailed(extStorages[i], receiver, id);
                         }
                     }
                 }
             }
         }
 
-        _requireDelivered(releaseOrMint.localToken, releaseOrMint.receiver, ids);
-        _consumeInboundRateLimit(releaseOrMint.remoteChainSelector, releaseOrMint.localToken, ids.length);
+        _requireDelivered(localToken, receiver, ids);
+        _consumeInboundRateLimit(releaseOrMint.remoteChainSelector, localToken, ids.length);
     }
 
     function _lockOrBurn(LockOrBurn memory lockOrBurn)
         internal
         virtual
         override
+        whenNotPaused
         onlyLocalToken(lockOrBurn.localToken)
         onlyRemoteChain(lockOrBurn.remoteChainSelector)
         onlyEnabledChain(lockOrBurn.remoteChainSelector)

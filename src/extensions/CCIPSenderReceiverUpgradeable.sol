@@ -3,18 +3,23 @@ pragma solidity ^0.8.0;
 
 import {IRMN} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IRMN.sol";
 import {IWrappedNative} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IWrappedNative.sol";
+import {IPriceRegistry} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IPriceRegistry.sol";
 import {IAny2EVMMessageReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IAny2EVMMessageReceiver.sol";
 import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-import {IRouterClientExtended} from "src/interfaces/IRouterClientExtended.sol";
+import {IRouterClientExtended} from "src/interfaces/external/IRouterClientExtended.sol";
+import {IEVM2EVMOnRamp} from "src/interfaces/external/IEVM2EVMOnRamp.sol";
 import {ICCIPSenderReceiver} from "src/interfaces/extensions/ICCIPSenderReceiver.sol";
+import {Any2EVMAddress} from "src/libraries/Any2EVMAddress.sol";
 
 abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderReceiver {
+    using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.UintSet;
 
     uint256[50] private __gap1;
@@ -27,7 +32,7 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
 
     uint256[50] private __gap2;
 
-    modifier onlyEnabledSender(uint64 remoteChainSelector, bytes calldata sender) {
+    modifier onlyEnabledSender(uint64 remoteChainSelector, Any2EVMAddress memory sender) {
         _requireEnabledSender(remoteChainSelector, sender);
         _;
     }
@@ -88,20 +93,47 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         onlyRouter
         notCursed(message.sourceChainSelector)
         onlyEnabledChain(message.sourceChainSelector)
-        onlyEnabledSender(message.sourceChainSelector, message.sender)
+        onlyEnabledSender(message.sourceChainSelector, Any2EVMAddress(message.sender))
     {
         _ccipReceive(message);
 
-        emit MessageReceived(abi.decode(message.sender, (address)), message.messageId);
+        emit MessageReceived(Any2EVMAddress(message.sender), message.messageId);
+    }
+
+    function isFeeTokenSupported(uint64 remoteChainSelector, address token) external view returns (bool) {
+        address[] memory feeTokens = getFeeTokens(remoteChainSelector);
+        uint256 feeTokenCount = feeTokens.length;
+        if (feeTokenCount == 0) return false;
+
+        for (uint256 i; i < feeTokenCount; ++i) {
+            if (feeTokens[i] == token) return true;
+        }
+
+        return false;
+    }
+
+    function getFeeTokens(uint64 remoteChainSelector)
+        public
+        view
+        onlyRemoteChain(remoteChainSelector)
+        onlyEnabledChain(remoteChainSelector)
+        returns (address[] memory feeTokens)
+    {
+        return IPriceRegistry(IEVM2EVMOnRamp(s_router.getOnRamp(remoteChainSelector)).getDynamicConfig().priceRegistry)
+            .getFeeTokens();
     }
 
     function isSupportedChain(uint64 remoteChainSelector) public view returns (bool) {
         return s_remoteChainSelectors.contains(remoteChainSelector);
     }
 
-    function isSenderEnabled(uint64 remoteChainSelector, bytes calldata sender) public view returns (bool yes) {
+    function isSenderEnabled(uint64 remoteChainSelector, Any2EVMAddress memory sender)
+        public
+        view
+        returns (bool yes)
+    {
         if (!isSupportedChain(remoteChainSelector)) return false;
-        return keccak256(s_remoteChainConfigs[remoteChainSelector]._addr) == keccak256(sender);
+        return s_remoteChainConfigs[remoteChainSelector]._addr.eq(sender);
     }
 
     function getSupportedChains() public view returns (uint64[] memory chains) {
@@ -145,21 +177,19 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
      */
     function _ccipReceive(Client.Any2EVMMessage calldata message) internal virtual;
 
-    function _addRemoteChain(uint64 remoteChainSelector, bytes memory addr)
+    function _addRemoteChain(uint64 remoteChainSelector, Any2EVMAddress memory addr)
         internal
         onlyRemoteChain(remoteChainSelector)
     {
-        _requireNonZero(addr.length);
+        _requireNonZero(addr);
         _requireNonZero(remoteChainSelector);
-
-        bytes32 addressHash = keccak256(addr);
 
         if (s_remoteChainSelectors.contains(remoteChainSelector)) revert ChainAlreadyEnabled(remoteChainSelector);
         s_remoteChainSelectors.add(remoteChainSelector);
         s_remoteChainConfigs[remoteChainSelector] =
             RemoteChainConfig({_chainSelector: remoteChainSelector, _addr: addr});
 
-        emit RemoteChainEnabled(msg.sender, remoteChainSelector, addressHash);
+        emit RemoteChainEnabled(msg.sender, remoteChainSelector, addr);
     }
 
     function _removeRemoteChain(uint64 remoteChainSelector)
@@ -175,24 +205,26 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
 
     function _sendDataPayFeeToken(
         uint64 remoteChainSelector,
-        address receiver,
-        IERC20 feeToken,
+        Any2EVMAddress memory receiver,
+        bytes memory data,
         uint256 gasLimit,
         bool allowOutOfOrderExecution,
-        bytes memory data
-    ) internal notCursed(remoteChainSelector) nonZero(receiver) returns (bytes32 messageId) {
+        address feeToken
+    ) internal notCursed(remoteChainSelector) returns (bytes32 messageId) {
+        _requireNonZero(receiver);
         _requireNonZero(gasLimit);
         _requireNonZero(data.length);
 
         (uint256 fee, Client.EVM2AnyMessage memory message) =
-            _getSendDataFee(remoteChainSelector, receiver, feeToken, gasLimit, allowOutOfOrderExecution, data);
+            _getSendDataFee(remoteChainSelector, receiver, data, gasLimit, allowOutOfOrderExecution, feeToken);
 
-        if (address(feeToken) == address(0)) {
+        if (feeToken == address(0)) {
             if (msg.value < fee) revert InsufficientAllowance(fee, msg.value);
 
-            IWrappedNative wnt = IWrappedNative(s_router.getWrappedNative());
-            wnt.deposit{value: fee}();
-            feeToken = IERC20(address(wnt));
+            feeToken = s_router.getWrappedNative();
+            // Overwrite feeToken to wrapped native token
+            message.feeToken = feeToken;
+            IWrappedNative(feeToken).deposit{value: fee}();
 
             uint256 overspent = fee - msg.value;
             if (overspent > 0) {
@@ -203,10 +235,10 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
             }
         } else {
             if (msg.value != 0) revert MsgValueNotAllowed(msg.value);
-            feeToken.transferFrom(msg.sender, address(this), fee);
+            IERC20(feeToken).safeTransferFrom(msg.sender, address(this), fee);
         }
 
-        feeToken.approve(address(s_router), fee);
+        IERC20(feeToken).approve(address(s_router), fee);
 
         messageId = s_router.ccipSend(remoteChainSelector, message);
 
@@ -215,11 +247,11 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
 
     function _getSendDataFee(
         uint64 remoteChainSelector,
-        address receiver,
-        IERC20 feeToken,
+        Any2EVMAddress memory receiver,
+        bytes memory data,
         uint256 gasLimit,
         bool allowOutOfOrderExecution,
-        bytes memory data
+        address feeToken
     )
         internal
         view
@@ -228,13 +260,13 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         returns (uint256 fee, Client.EVM2AnyMessage memory message)
     {
         message = Client.EVM2AnyMessage({
-            receiver: abi.encode(receiver),
+            receiver: receiver.raw(),
             data: data,
             tokenAmounts: new Client.EVMTokenAmount[](0),
             extraArgs: Client._argsToBytes(
                 Client.EVMExtraArgsV2({gasLimit: gasLimit, allowOutOfOrderExecution: allowOutOfOrderExecution})
             ),
-            feeToken: address(feeToken)
+            feeToken: feeToken
         });
 
         fee = s_router.getFee(remoteChainSelector, message);
@@ -261,6 +293,10 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         if (val == 0) revert ZeroValueNotAllowed();
     }
 
+    function _requireNonZero(Any2EVMAddress memory addr) internal pure {
+        if (addr.isNull()) revert ZeroAddressNotAllowed();
+    }
+
     function _requireNotCursed(uint64 remoteChainSelector) internal view {
         if (s_rmnProxy.isCursed(bytes16(uint128(remoteChainSelector)))) revert CursedByRMN();
     }
@@ -269,10 +305,7 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         if (!isSupportedChain(remoteChainSelector)) revert NonExistentChain(remoteChainSelector);
     }
 
-    function _requireEnabledSender(uint64 remoteChainSelector, bytes memory sender) internal view {
-        bytes32 senderHash = keccak256(sender);
-        if (keccak256(s_remoteChainConfigs[remoteChainSelector]._addr) != senderHash) {
-            revert SenderNotEnabled(remoteChainSelector, senderHash);
-        }
+    function _requireEnabledSender(uint64 remoteChainSelector, Any2EVMAddress memory sender) internal view {
+        if (!isSenderEnabled(remoteChainSelector, sender)) revert SenderNotEnabled(remoteChainSelector, sender);
     }
 }

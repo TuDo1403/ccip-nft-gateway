@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {ITokenPoolCallback} from "src/interfaces/pools/ITokenPoolCallback.sol";
+import {Any2EVMAddress} from "src/libraries/Any2EVMAddress.sol";
 
-interface ITokenPool is ITokenPoolCallback {
+interface ITokenPool {
     error OnlyLocalToken(address expected, address actual);
 
     struct LockOrBurn {
-        bytes receiver;
         uint64 remoteChainSelector;
         address originalSender;
         uint256 amount;
@@ -16,18 +15,18 @@ interface ITokenPool is ITokenPoolCallback {
     }
 
     struct ReleaseOrMint {
-        bytes originalSender;
+        Any2EVMAddress originalSender;
         uint64 remoteChainSelector;
-        address receiver;
+        Any2EVMAddress receiver;
         uint256 amount;
-        address localToken;
-        bytes remotePoolAddress;
+        Any2EVMAddress localToken;
+        Any2EVMAddress remotePoolAddress;
         bytes remotePoolData;
     }
 
     event GasLimitConfigured(address indexed by, uint32 fixedGas, uint32 dynamicGas);
     event RemotePoolAdded(
-        address indexed by, uint64 indexed remoteChainSelector, address indexed remotePool, address token
+        address indexed by, uint64 indexed remoteChainSelector, Any2EVMAddress remotePool, Any2EVMAddress token
     );
     event RemotePoolRemoved(address indexed by, uint64 indexed remoteChainSelector);
 }
