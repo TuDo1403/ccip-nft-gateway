@@ -6,16 +6,28 @@ import {IAny2EVMMessageReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/i
 
 interface ICCIPSenderReceiver is IAny2EVMMessageReceiver, IERC165 {
     error CursedByRMN();
-    error SenderNotEnabled(uint64 chainSelector, address sender);
-    error OnlyOtherChain(uint64 chainSelector);
+    error SenderNotEnabled(uint64 chainSelector, bytes32 senderHash);
+    error OnlyRemoteChain(uint64 chainSelector);
+    error OnlyLocalChain(uint64 chainSelector);
     error ZeroAddressNotAllowed();
+    error ZeroValueNotAllowed();
     error InvalidRouter(address expected, address actual);
-    error InvalidArmProxy(address expected, address actual);
-    error NativeFeeNotAllowed();
     error NonExistentChain(uint64 chainSelector);
-    error CallerIsNotARampOnRouter(address caller);
-    error ChainNotAllowed(uint64 remoteChainSelector);
+    error ChainAlreadyEnabled(uint64 chainSelector);
+    error ChainNotSupported(uint64 chainSelector);
+    error MsgValueNotAllowed(uint256 value);
+    error RefundFailed(address to, uint256 value);
+    error InsufficientAllowance(uint256 expected, uint256 actual);
 
+    struct RemoteChainConfig {
+        uint64 _chainSelector;
+        bytes _addr;
+    }
+
+    event Refunded(address indexed to, uint256 value);
     event MessageSent(address indexed by, bytes32 indexed messageId);
     event MessageReceived(address indexed by, bytes32 indexed messageId);
+
+    event RemoteChainDisabled(address indexed by, uint64 indexed chainSelector);
+    event RemoteChainEnabled(address indexed by, uint64 indexed chainSelector, bytes32 indexed addressHash);
 }

@@ -1,0 +1,60 @@
+// // SPDX-License-Identifier: UNLICENSED
+// pragma solidity ^0.8.0;
+
+// import {RateLimiter} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/RateLimiter.sol";
+// import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
+// import {IAny2EVMMessageReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IAny2EVMMessageReceiver.sol";
+
+// interface IERC721TokenPool is IAny2EVMMessageReceiver {
+//     error Unauthorized(address sender);
+//     error ZeroIdsNotAllowed();
+//     error PoolAlreadyAdded(uint64 chainSelector, address pool);
+//     error ExtStorageAlreadyAdded(address extStorage);
+//     error ExtStorageNotAdded(address extStorage);
+//     error NFTDeliveryFailed(address recipient, uint256 id);
+//     error MintFailed(address minter, address to, uint256 id);
+//     error TokenNotERC721();
+
+//     event GasLimitConfigUpdated(address indexed by, uint64 fixedGas, uint64 dynamicGas);
+//     event ExternalStorageUpdated(address indexed by, address indexed extStorage, bool added);
+
+//     event RateLimitAdminSet(address indexed by, address rateLimitAdmin);
+//     event CrossChainReceived(
+//         address indexed from, address indexed to, uint256[] ids, uint64 srcChainSelector, uint64 dstChainSelector
+//     );
+//     event CrossChainSent(
+//         address indexed from, address indexed to, uint256[] ids, uint64 srcChainSelector, uint64 dstChainSelector
+//     );
+
+//     function initialize(
+//         address owned,
+//         address router,
+//         address rmnProxy,
+//         address token,
+//         uint64 currentChainSelector,
+//         uint64 fixedGas,
+//         uint64 dynamicGas
+//     ) external;
+
+//     function addRemotePool(uint64 remoteChainSelector, address pool) external;
+
+//     function setRateLimitAdmin(address rateLimitAdmin) external;
+
+//     function setExternalStorage(address extStorage, bool shouldAdd) external;
+
+//     // function crossChainTransfer(
+//     //     address to,
+//     //     uint256 tokenId,
+//     //     uint256 quantity,
+//     //     uint64 dstChainSelector,
+//     //     PayFeesIn payFeesIn
+//     // ) external payable returns (bytes32 messageId);
+//     // function enableChain(uint64 srcChainSelector, address pool, bytes calldata extraArgs) external;
+//     // function disableChain(uint64 srcChainSelector) external;
+//     // function getCCIPRouter() external view returns (address);
+//     // function getCurrentChainSelector() external view returns (uint64);
+//     // function getNFTAddress() external view returns (address);
+//     // function getRoninGateway() external view returns (address);
+//     // function getLinkToken() external view returns (address);
+//     // function getSourcePool(uint64 srcChainSelector) external view returns (address, bytes memory);
+// }

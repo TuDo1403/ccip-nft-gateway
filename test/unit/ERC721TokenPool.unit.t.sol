@@ -69,7 +69,6 @@
 
 //         ccipLocalSimulatorFork = new CCIPLocalSimulatorFork();
 //         vm.makePersistent(address(ccipLocalSimulatorFork));
-        
 
 //         ccipLocalSimulatorFork.setNetworkDetails(
 //             2021,

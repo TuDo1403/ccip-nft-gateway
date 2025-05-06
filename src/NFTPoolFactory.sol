@@ -7,15 +7,12 @@ import {AccessControlEnumerableUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IBeacon} from "@openzeppelin/contracts/proxy/beacon/IBeacon.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 import {CCIPSenderReceiverUpgradeable} from "src/extensions/CCIPSenderReceiverUpgradeable.sol";
-import {IOwnable} from "src/interfaces/external/IOwnable.sol";
-import {IERC721TokenPool} from "src/interfaces/IERC721TokenPool.sol";
 import {INFTPoolFactory} from "src/interfaces/INFTPoolFactory.sol";
-import {INFTPoolCallback} from "src/interfaces/INFTPoolCallback.sol";
+import {ITokenPoolCallback} from "src/interfaces/pools/ITokenPoolCallback.sol";
 
 contract NFTPoolFactory is
     PausableUpgradeable,
@@ -33,11 +30,14 @@ contract NFTPoolFactory is
     uint256[50] private __gap;
 
     EnumerableSet.AddressSet internal s_deployedPools;
-    EnumerableSet.UintSet internal s_remoteChainSelectors;
-    // mapping(address creator => uint256 nonce) internal s_creatorNonces;
-    mapping(uint64 remoteChainSelector => address factory) internal s_remoteFactories;
+    mapping(uint64 remoteChainSelector => address router) internal s_remoteRouters;
     mapping(Standard std => mapping(PoolType pt => PoolConfig config)) internal s_poolConfigs;
     mapping(uint64 chainSelector => mapping(address creator => uint256 nonce)) internal s_creatorNonces;
+
+    modifier onlySupported(Standard std, PoolType pt) {
+        _requireSupport(std, pt);
+        _;
+    }
 
     constructor() {
         _disableInitializers();
@@ -45,6 +45,7 @@ contract NFTPoolFactory is
 
     function initialize(address admin, address router, address rmnProxy, uint64 currentChainSelector)
         external
+        nonZero(admin)
         initializer
     {
         __CCIPSenderReceiverUpgradeable_init(router, rmnProxy, currentChainSelector);
@@ -52,112 +53,122 @@ contract NFTPoolFactory is
         _grantRole(PAUSER_ROLE, admin);
     }
 
-    function updatePoolConfig(Standard std, PoolType poolType, uint64 fixedGas, uint64 dynamicGas, address bluePrint)
+    function addRemoteFactory(uint64 remoteChainSelector, address factory, address router)
         external
+        nonZero(router)
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
-        s_poolConfigs[std][poolType] = PoolConfig({fixedGas: fixedGas, dynamicGas: dynamicGas, bluePrint: bluePrint});
+        s_remoteRouters[remoteChainSelector] = router;
+        _addRemoteChain(remoteChainSelector, abi.encode(factory));
+
+        emit RemotePoolAdded(msg.sender, remoteChainSelector, factory, router);
     }
 
-    function _getSalt(Standard std, PoolType pt, address creator, uint64 chainSelector)
-        internal
-        view
-        returns (bytes32 salt)
+    function removeRemoteFactory(uint64 remoteChainSelector) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        delete s_remoteRouters[remoteChainSelector];
+        _removeRemoteChain(remoteChainSelector);
+
+        emit RemotePoolRemoved(msg.sender, remoteChainSelector);
+    }
+
+    function deployPool(DeployConfig calldata local, DeployConfig calldata remote)
+        external
+        onlySupported(local.std, local.pt)
+        whenNotPaused
     {
-        return keccak256(abi.encode(std, pt, creator, chainSelector, s_creatorNonces[chainSelector][creator]));
+        _deployPoolAndInit(local.chainSelector, local, remote);
+    }
+
+    function dualDeployPool(IERC20 feeToken, DeployConfig calldata local, DeployConfig calldata remote)
+        external
+        onlySupported(local.std, local.pt)
+        onlySupported(remote.std, remote.pt)
+        whenNotPaused
+    {
+        address remoteDeployer = getRemoteRouter(remote.chainSelector);
+        address actual = predictPool(remote.std, remote.pt, remoteDeployer, remote.chainSelector);
+        if (remote.pool != actual) revert PredictAddressNotMatch(remote.pool, actual);
+        _incrementNonce(local.chainSelector, remoteDeployer);
+
+        _sendDataPayFeeToken({
+            remoteChainSelector: remote.chainSelector,
+            receiver: getRemoteFactory(remote.chainSelector),
+            feeToken: feeToken,
+            gasLimit: s_poolConfigs[remote.std][remote.pt]._deployGas,
+            allowOutOfOrderExecution: false,
+            data: abi.encode(remote, local)
+        });
+
+        _deployPoolAndInit(local.chainSelector, local, remote);
+    }
+
+    function updatePoolConfig(
+        Standard std,
+        PoolType pt,
+        uint32 deployGas,
+        uint32 fixedGas,
+        uint32 dynamicGas,
+        address bluePrint
+    ) external onlySupported(std, pt) onlyRole(DEFAULT_ADMIN_ROLE) nonZero(bluePrint) {
+        s_poolConfigs[std][pt] =
+            PoolConfig({_deployGas: deployGas, _fixedGas: fixedGas, _dynamicGas: dynamicGas, _bluePrint: bluePrint});
+
+        emit PoolConfigUpdated(msg.sender, std, pt, s_poolConfigs[std][pt]);
+    }
+
+    function getDeployedPools(uint256 offset, uint256 limit)
+        external
+        view
+        returns (address[] memory pools, uint256 total)
+    {
+        total = s_deployedPools.length();
+        if (offset >= total) return (pools, total);
+        if (limit == 0) limit = total - offset;
+        if (limit > total) limit = total;
+
+        pools = new address[](limit);
+        for (uint256 i = 0; i < limit; ++i) {
+            pools[i] = s_deployedPools.at(offset + i);
+        }
+    }
+
+    function getRemoteFactory(uint64 remoteChainSelector) public view returns (address) {
+        return abi.decode(s_remoteChainConfigs[remoteChainSelector]._addr, (address));
+    }
+
+    function getRemoteRouter(uint64 remoteChainSelector) public view returns (address) {
+        return s_remoteRouters[remoteChainSelector];
     }
 
     function predictPool(Standard std, PoolType pt, address creator, uint64 chainSelector)
         public
         view
+        onlySupported(std, pt)
+        nonZero(creator)
         returns (address)
     {
-        address deployer =
-            chainSelector == s_currentChainSelector ? address(this) : s_remoteFactories[chainSelector]._factory;
-        address bluePrint = s_poolConfigs[std][pt].bluePrint;
+        _requireNonZero(chainSelector);
+        creator = chainSelector == s_currentChainSelector ? creator : getRemoteRouter(chainSelector);
+        address deployer = chainSelector == s_currentChainSelector ? address(this) : getRemoteFactory(chainSelector);
+        address bluePrint = s_poolConfigs[std][pt]._bluePrint;
         return Clones.predictDeterministicAddress(bluePrint, _getSalt(std, pt, creator, chainSelector), deployer);
     }
 
-    function getFee(IERC20 feeToken, Standard std, PoolType pt, uint64 remoteChainSelector)
+    function estimateFee(IERC20 feeToken, Standard std, PoolType pt, uint64 remoteChainSelector)
         external
         view
-        onlyOtherChain(remoteChainSelector)
-        onlyEnabledChain(remoteChainSelector)
+        onlySupported(std, pt)
         returns (uint256 fee)
     {
         DeployConfig memory empty;
         (fee,) = _getSendDataFee({
-            destChainSelector: remoteChainSelector,
-            receiver: s_remoteFactories[remoteChainSelector],
+            remoteChainSelector: remoteChainSelector,
+            receiver: getRemoteFactory(remoteChainSelector),
             feeToken: feeToken,
-            gasLimit: s_poolConfigs[std][pt].deployGas,
+            gasLimit: s_poolConfigs[std][pt]._deployGas,
             allowOutOfOrderExecution: false,
             data: abi.encode(uint8(0), bytes32(0), address(0), empty, empty)
         });
-    }
-
-    function deployPool(
-        IERC20 feeToken,
-        bool crossDeploy,
-        DeployConfig calldata local,
-        DeployConfig calldata remote
-    )
-        external
-        whenNotPaused
-        nonZero(local.token)
-        onlyOtherChain(remote.chainSelector)
-        onlyEnabledChain(remote.chainSelector)
-    {
-        if (local.chainSelector != s_currentChainSelector) revert CurrentChainSelectorNotMatch(local.chainSelector);
-
-        if (crossDeploy) {
-            address remoteDeployer = s_remoteFactories[remote.chainSelector]._factory;
-            address actual = predictPool(remote.std, remote.pt, remoteDeployer, local.chainSelector);
-            if (remote.pool != actual) revert PredictAddressNotMatch(remote.pool, actual);
-            _incrementNonce(local.chainSelector, remoteDeployer);
-
-            _sendDataPayFeeToken({
-                destChainSelector: remote.chainSelector,
-                receiver: s_remoteFactories[remote.chainSelector],
-                feeToken: feeToken,
-                gasLimit: s_poolConfigs[remote.std][remote.pt].deployGas,
-                allowOutOfOrderExecution: false,
-                data: abi.encode(remote, local)
-            });
-        }
-
-        _deployPoolAndInit(local.chainSelector, local, remote);
-    }
-
-    function addRemoteFactory(uint64 remoteChainSelector, address factory)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-        nonZero(factory)
-        onlyOtherChain(remoteChainSelector)
-    {
-        if (s_remoteFactories[remoteChainSelector] != address(0)) {
-            revert FactoryAlreadyAdded(remoteChainSelector, factory);
-        }
-        s_remoteFactories[remoteChainSelector] = factory;
-        s_remoteChainSelectors.add(remoteChainSelector);
-    }
-
-    function removeRemoteFactory(uint64 remoteChainSelector)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-        onlyOtherChain(remoteChainSelector)
-        onlyEnabledChain(remoteChainSelector)
-    {
-        s_remoteFactories[remoteChainSelector] = address(0);
-        s_remoteChainSelectors.remove(remoteChainSelector);
-    }
-
-    function isSupportedChain(uint64 remoteChainSelector) public view override returns (bool) {
-        return s_remoteFactories[remoteChainSelector] != address(0);
-    }
-
-    function isSenderEnabled(uint64 remoteChainSelector, address srcSender) public view override returns (bool) {
-        return s_remoteFactories[remoteChainSelector] == srcSender;
     }
 
     function supportsInterface(bytes4 interfaceId)
@@ -171,34 +182,54 @@ contract NFTPoolFactory is
     }
 
     function _incrementNonce(uint64 chainSelector, address creator) internal {
-        s_creatorNonces[chainSelector][creator]++;
+        uint256 next = ++s_creatorNonces[chainSelector][creator];
+        emit NonceIncremented(msg.sender, chainSelector, creator, next);
     }
 
     function _ccipReceive(Client.Any2EVMMessage calldata message) internal virtual override whenNotPaused {
         (DeployConfig memory local, DeployConfig memory remote) = abi.decode(message.data, (DeployConfig, DeployConfig));
-        _deployPoolAndInit(message.sourceChainSelector, local, remote);
+        _deployPoolAndInit(remote.chainSelector, local, remote);
     }
 
-    function _deployPoolAndInit(address srcChainSelector, DeployConfig memory local, DeployConfig memory remote)
+    function _deployPoolAndInit(uint64 srcChainSelector, DeployConfig memory local, DeployConfig memory remote)
         internal
+        nonZero(local.token)
+        onlyLocalChain(local.chainSelector)
     {
         bytes32 salt = _getSalt(local.std, local.pt, msg.sender, srcChainSelector);
-        address actual = s_poolConfigs[local.std][local.pt].bluePrint.cloneDeterministic(salt);
+        address actual = s_poolConfigs[local.std][local.pt]._bluePrint.cloneDeterministic(salt);
         if (local.pool != actual) revert PredictAddressNotMatch(local.pool, actual);
         _incrementNonce(srcChainSelector, msg.sender);
 
         // Initialize the localPool
-        INFTPoolCallback(local.pool).initialize(
-            address(this),
-            address(s_router),
-            address(s_rmnProxy),
-            local.token,
-            local.chainSelector,
-            local.dynamicGas,
-            local.fixedGas
-        );
+        ITokenPoolCallback(local.pool).initialize({
+            admin: address(this),
+            token: local.token,
+            fixedGas: local.fixedGas,
+            dynamicGas: local.dynamicGas,
+            router: address(s_router),
+            rmnProxy: address(s_rmnProxy),
+            currentChainSelector: local.chainSelector
+        });
         if (remote.pool != address(0)) {
-            INFTPoolCallback(local.pool).addRemotePool(remote.chainSelector, remote.pool, remote.token);
+            _requireRemoteChain(remote.chainSelector);
+            _requireEnabledChain(remote.chainSelector);
+            ITokenPoolCallback(local.pool).addRemotePool(remote.chainSelector, remote.pool, remote.token);
         }
+
+        s_deployedPools.add(local.pool);
+    }
+
+    function _getSalt(Standard std, PoolType pt, address creator, uint64 chainSelector)
+        internal
+        view
+        returns (bytes32 salt)
+    {
+        return keccak256(abi.encode(std, pt, creator, chainSelector, s_creatorNonces[chainSelector][creator]));
+    }
+
+    function _requireSupport(Standard std, PoolType pt) internal pure {
+        if (std == Standard.Unknown) revert StandardNotSupported(std);
+        if (pt == PoolType.Unknown) revert PoolTypeNotSupported(pt);
     }
 }

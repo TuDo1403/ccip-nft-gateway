@@ -6,4 +6,5 @@ import {IRouter} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IRoute
 
 interface IRouterClientExtended is IRouter, IRouterClient {
     function getArmProxy() external view returns (address);
+    function getWrappedNative() external view returns (address);
 }

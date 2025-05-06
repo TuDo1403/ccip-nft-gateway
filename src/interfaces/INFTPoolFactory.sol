@@ -4,8 +4,7 @@ pragma solidity ^0.8.0;
 interface INFTPoolFactory {
     error PredictAddressNotMatch(address expected, address actual);
     error PoolTypeNotSupported(PoolType poolType);
-    error InvalidTransferLimitPerRequest();
-    error CurrentChainSelectorNotMatch(uint64 currentChainSelector);
+    error StandardNotSupported(Standard standard);
     error FactoryAlreadyAdded(uint64 chainSelector, address pool);
 
     enum PoolType {
@@ -26,16 +25,18 @@ interface INFTPoolFactory {
         address _bluePrint;
     }
 
-    struct RemoteFactoryConfig {
-        address _factory;
-        address _router;
-    }
-
     struct DeployConfig {
         Standard std;
         PoolType pt;
         address pool;
         address token;
+        uint32 fixedGas;
+        uint32 dynamicGas;
         uint64 chainSelector;
     }
+
+    event NonceIncremented(address indexed by, uint64 indexed chainSelector, address indexed creator, uint256 nonce);
+    event PoolConfigUpdated(address indexed by, Standard indexed std, PoolType indexed, PoolConfig config);
+    event RemotePoolAdded(address indexed by, uint64 indexed chainSelector, address indexed pool, address router);
+    event RemotePoolRemoved(address indexed by, uint64 indexed chainSelector);
 }
