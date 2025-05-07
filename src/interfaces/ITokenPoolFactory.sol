@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {Any2EVMAddress} from "src/libraries/Any2EVMAddress.sol";
-
 interface ITokenPoolFactory {
     error Unauthorized(address sender);
     error NotTokenPool(address pool);
@@ -33,14 +31,13 @@ interface ITokenPoolFactory {
     struct DeployConfig {
         Standard std;
         PoolType pt;
-        Any2EVMAddress pool;
-        Any2EVMAddress token;
+        address pool;
+        address token;
         uint32 fixedGas;
         uint32 dynamicGas;
         uint64 chainSelector;
     }
 
-    event NonceIncremented(address indexed by, uint64 indexed chainSelector, address indexed creator, uint256 nonce);
     event PoolConfigUpdated(address indexed by, Standard indexed std, PoolType indexed, PoolConfig config);
     event RemotePoolAdded(address indexed by, uint64 indexed chainSelector, address indexed pool, address router);
     event RemotePoolRemoved(address indexed by, uint64 indexed chainSelector);

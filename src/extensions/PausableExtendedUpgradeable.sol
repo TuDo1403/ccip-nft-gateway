@@ -6,21 +6,26 @@ import {AccessControlEnumerableUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 
 import {IPausable} from "src/interfaces/external/IPausable.sol";
+import {IPausableExtended} from "src/interfaces/extensions/IPausableExtended.sol";
 
-abstract contract PausableExtendedUpgradeable is PausableUpgradeable, AccessControlEnumerableUpgradeable {
+abstract contract PausableExtendedUpgradeable is
+    PausableUpgradeable,
+    AccessControlEnumerableUpgradeable,
+    IPausableExtended
+{
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     uint256[50] private __gap1;
 
-    address internal s_globalPauser;
+    address private s_globalPauser;
 
     uint256[50] private __gap2;
 
-    function __PausableExtendedUpgradeable_init(address globalPauser) internal onlyInitializing {
-        __PausableExtendedUpgradeable_init_unchained(globalPauser);
+    function __PausableExtended_init(address globalPauser) internal onlyInitializing {
+        __PausableExtended_init_unchained(globalPauser);
     }
 
-    function __PausableExtendedUpgradeable_init_unchained(address globalPauser) internal onlyInitializing {
+    function __PausableExtended_init_unchained(address globalPauser) internal onlyInitializing {
         s_globalPauser = globalPauser;
         _grantRole(PAUSER_ROLE, globalPauser);
     }
@@ -33,7 +38,7 @@ abstract contract PausableExtendedUpgradeable is PausableUpgradeable, AccessCont
         _unpause();
     }
 
-    function getGlobalPauser() external view returns (address) {
+    function getGlobalPauser() external view returns (address globalPauser) {
         return s_globalPauser;
     }
 

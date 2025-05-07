@@ -16,8 +16,8 @@ abstract contract RateLimitConsumerUpgradeable is AccessControlEnumerableUpgrade
 
     uint256[50] private __gap1;
 
-    mapping(uint64 remoteChainSelector => RateLimiter.TokenBucket) internal s_outboundConfig;
-    mapping(uint64 remoteChainSelector => RateLimiter.TokenBucket) internal s_inboundConfig;
+    mapping(uint64 remoteChainSelector => RateLimiter.TokenBucket) private s_outboundConfig;
+    mapping(uint64 remoteChainSelector => RateLimiter.TokenBucket) private s_inboundConfig;
 
     uint256[50] private __gap2;
 

@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+import {IRMN} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IRMN.sol";
 import {IAny2EVMMessageReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IAny2EVMMessageReceiver.sol";
-import {Any2EVMAddress} from "src/libraries/Any2EVMAddress.sol";
+
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+
+import {IRouterClientExtended} from "src/interfaces/external/IRouterClientExtended.sol";
 
 interface ICCIPSenderReceiver is IAny2EVMMessageReceiver, IERC165 {
     error CursedByRMN();
-    error SenderNotEnabled(uint64 chainSelector, Any2EVMAddress sender);
+    error SenderNotEnabled(uint64 chainSelector, address sender);
     error OnlyRemoteChain(uint64 chainSelector);
     error OnlyLocalChain(uint64 chainSelector);
     error ZeroAddressNotAllowed();
@@ -20,15 +23,25 @@ interface ICCIPSenderReceiver is IAny2EVMMessageReceiver, IERC165 {
     error RefundFailed(address to, uint256 value);
     error InsufficientAllowance(uint256 expected, uint256 actual);
 
-    struct RemoteChainConfig {
-        uint64 _chainSelector;
-        Any2EVMAddress _addr;
-    }
-
     event Refunded(address indexed to, uint256 value);
     event MessageSent(address indexed by, bytes32 indexed messageId);
-    event MessageReceived(Any2EVMAddress by, bytes32 indexed messageId);
-
+    event MessageReceived(address by, bytes32 indexed messageId);
     event RemoteChainDisabled(address indexed by, uint64 indexed chainSelector);
-    event RemoteChainEnabled(address indexed by, uint64 indexed chainSelector, Any2EVMAddress addr);
+    event RemoteChainEnabled(address indexed by, uint64 indexed chainSelector, address indexed remoteSender);
+
+    function isFeeTokenSupported(uint64 remoteChainSelector, address feeToken) external view returns (bool yes);
+
+    function getFeeTokens(uint64 remoteChainSelector) external view returns (address[] memory feeTokens);
+
+    function isSupportedChain(uint64 remoteChainSelector) external view returns (bool yes);
+
+    function getSupportedChains() external view returns (uint64[] memory remoteChainSelectors);
+
+    function isSenderEnabled(uint64 remoteChainSelector, address sender) external view returns (bool yes);
+
+    function getCurrentChainSelector() external view returns (uint64 currentChainSelector);
+
+    function getRouter() external view returns (IRouterClientExtended router);
+
+    function getRmnProxy() external view returns (IRMN rmnProxy);
 }
