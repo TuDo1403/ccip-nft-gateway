@@ -2,12 +2,13 @@
 pragma solidity ^0.8.0;
 
 import {MockERC721} from "forge-std/mocks/MockERC721.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
-contract MockERC721Mintable is MockERC721 {
+contract MockERC721Mintable is MockERC721, Ownable {
     mapping(address => bool) public canMint;
     bool public allowAll;
 
-    constructor(string memory _name, string memory _symbol) {
+    constructor(string memory _name, string memory _symbol) Ownable(msg.sender) {
         allowAll = true;
         initialize(_name, _symbol);
     }

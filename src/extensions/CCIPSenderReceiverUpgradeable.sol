@@ -67,22 +67,22 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         _;
     }
 
-    function __CCIPSenderReceiverUpgradeable_init(address router, address rmnProxy, uint64 currentChainSelector)
+    function __CCIPSenderReceiverUpgradeable_init(address router, uint64 currentChainSelector)
         internal
         onlyInitializing
     {
-        __CCIPSenderReceiverUpgradeable_init_unchained(router, rmnProxy, currentChainSelector);
+        __CCIPSenderReceiverUpgradeable_init_unchained(router, currentChainSelector);
     }
 
-    function __CCIPSenderReceiverUpgradeable_init_unchained(
-        address router,
-        address rmnProxy,
-        uint64 currentChainSelector
-    ) internal nonZero(router) nonZero(rmnProxy) onlyInitializing {
+    function __CCIPSenderReceiverUpgradeable_init_unchained(address router, uint64 currentChainSelector)
+        internal
+        nonZero(router)
+        onlyInitializing
+    {
         _requireNonZero(currentChainSelector);
 
         s_router = IRouterClientExtended(router);
-        s_rmnProxy = IRMN(rmnProxy);
+        s_rmnProxy = IRMN(s_router.getArmProxy());
         s_currentChainSelector = currentChainSelector;
     }
 
@@ -127,11 +127,7 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         return s_remoteChainSelectors.contains(remoteChainSelector);
     }
 
-    function isSenderEnabled(uint64 remoteChainSelector, Any2EVMAddress memory sender)
-        public
-        view
-        returns (bool yes)
-    {
+    function isSenderEnabled(uint64 remoteChainSelector, Any2EVMAddress memory sender) public view returns (bool yes) {
         if (!isSupportedChain(remoteChainSelector)) return false;
         return s_remoteChainConfigs[remoteChainSelector]._addr.eq(sender);
     }

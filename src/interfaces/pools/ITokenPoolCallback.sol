@@ -11,7 +11,6 @@ interface ITokenPoolCallback is IAccessControl {
         uint32 fixedGas,
         uint32 dynamicGas,
         address router,
-        address rmnProxy,
         uint64 currentChainSelector
     ) external;
 

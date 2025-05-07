@@ -8,7 +8,7 @@ import {LockMintERC721TokenPool} from "src/pools/erc721/LockMintERC721TokenPool.
 import {CCIPLocalSimulator} from "test/mocks/CCIPLocalSimulator.sol";
 import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
-import {Any2EVMAddress} from "src/libraries/Any2EVMAddress.sol";
+import {toAny, Any2EVMAddress} from "src/libraries/Any2EVMAddress.sol";
 import {ITokenPoolFactory} from "src/interfaces/ITokenPoolFactory.sol";
 import {MockERC721Mintable} from "test/mocks/MockERC721Mintable.sol";
 
@@ -48,7 +48,6 @@ contract TokenPoolFactory_DualDeployTest is Test {
                             admin,
                             address(localSimulator.tokenAdminRegistry()),
                             address(localSimulator.router()),
-                            address(localSimulator.rmnProxy()),
                             currentChainSelector
                         )
                     )
@@ -67,13 +66,15 @@ contract TokenPoolFactory_DualDeployTest is Test {
                             admin,
                             address(localSimulator.tokenAdminRegistry()),
                             address(localSimulator.router()),
-                            address(localSimulator.rmnProxy()),
                             remoteChainSelector
                         )
                     )
                 )
             )
         );
+
+        vm.label(address(localFactory), "LocalFactory");
+        vm.label(address(remoteFactory), "RemoteFactory");
 
         vm.startPrank(admin);
         // Local Setup
@@ -105,12 +106,10 @@ contract TokenPoolFactory_DualDeployTest is Test {
         ITokenPoolFactory.Standard std = ITokenPoolFactory.Standard.ERC721;
         ITokenPoolFactory.PoolType pt = ITokenPoolFactory.PoolType.LockMint;
 
-        ITokenPoolFactory.DeployConfig memory local = localFactory.getDeployConfig(
-            std, pt, alice, currentChainSelector, currentChainSelector, address(localToken)
-        );
-        ITokenPoolFactory.DeployConfig memory remote = remoteFactory.getDeployConfig(
-            std, pt, alice, currentChainSelector, remoteChainSelector, address(remoteToken)
-        );
+        ITokenPoolFactory.DeployConfig memory local =
+            localFactory.getDeployConfig(std, pt, alice, currentChainSelector, address(localToken));
+        ITokenPoolFactory.DeployConfig memory remote =
+            localFactory.getDeployConfig(std, pt, alice, remoteChainSelector, address(remoteToken));
 
         address[] memory feeTokens = localFactory.getFeeTokens(remoteChainSelector);
         assertTrue(feeTokens.length > 0, "Fee tokens length mismatch");
@@ -118,9 +117,52 @@ contract TokenPoolFactory_DualDeployTest is Test {
         uint256 fee = localFactory.estimateFee(address(0), std, pt, remoteChainSelector);
         assertTrue(fee > 0, "Fee should be greater than 0");
 
-        vm.deal(alice, fee);
+        deal(alice, fee);
         vm.prank(alice);
         localFactory.dualDeployPool{value: fee}(address(0), local, remote);
+
+        assertTrue(local.pool.toEVM().code.length > 0, "Local pool code length mismatch");
+        assertTrue(remote.pool.toEVM().code.length > 0, "Remote pool code length mismatch");
+        assertEq(local.pool.toEVM().codehash, remote.pool.toEVM().codehash, "Pool code mismatch");
+
+        LockMintERC721TokenPool localPool = LockMintERC721TokenPool(local.pool.toEVM());
+        LockMintERC721TokenPool remotePool = LockMintERC721TokenPool(remote.pool.toEVM());
+
+        vm.label(address(localPool), "LocalPool");
+        vm.label(address(remotePool), "RemotePool");
+
+        assertTrue(localPool.isSupportedChain(remoteChainSelector), "Local pool supported chain mismatch");
+        assertTrue(remotePool.isSupportedChain(currentChainSelector), "Remote pool supported chain mismatch");
+
+        uint256 id = vm.unixTime();
+        localToken.mint(alice, id);
+        fee = localPool.estimateFee(address(0), remoteChainSelector, 1);
+        deal(alice, fee);
+
+        vm.startPrank(alice);
+        localToken.approve(address(localPool), id);
+        localPool.crossBatchTransfer{value: fee}(remoteChainSelector, toAny(bob), _toSingleton(id), address(0));
+        vm.stopPrank();
+
+        assertEq(localToken.ownerOf(id), address(localPool), "Local token owner mismatch");
+        assertEq(remoteToken.ownerOf(id), bob, "Remote token owner mismatch");
+
+        fee = remotePool.estimateFee(address(0), currentChainSelector, 1);
+        deal(bob, fee);
+
+        // vm.startPrank(bob);
+        // remoteToken.approve(address(remotePool), id);
+        // remotePool.crossBatchTransfer{value: fee}(currentChainSelector, toAny(alice), _toSingleton(id), address(0));
+        // vm.stopPrank();
+
+        // assertEq(remoteToken.ownerOf(id), address(remotePool), "Remote token owner mismatch");
+        // assertEq(localToken.ownerOf(id), alice, "Local token owner mismatch");
+    }
+
+    function _toSingleton(uint256 id) internal pure returns (uint256[] memory) {
+        uint256[] memory singleton = new uint256[](1);
+        singleton[0] = id;
+        return singleton;
     }
 
     function _createBlueprint(bytes memory bytecode) internal returns (address) {

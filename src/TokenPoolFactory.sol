@@ -14,7 +14,6 @@ import {CCIPSenderReceiverUpgradeable} from "src/extensions/CCIPSenderReceiverUp
 import {ITokenPoolFactory} from "src/interfaces/ITokenPoolFactory.sol";
 import {ITokenPoolCallback} from "src/interfaces/pools/ITokenPoolCallback.sol";
 import {toAny} from "src/libraries/Any2EVMAddress.sol";
-import {console} from "forge-std/console.sol";
 
 contract TokenPoolFactory is
     PausableUpgradeable,
@@ -44,15 +43,14 @@ contract TokenPoolFactory is
         _disableInitializers();
     }
 
-    function initialize(
-        address admin,
-        address tokenAdminRegistry,
-        address router,
-        address rmnProxy,
-        uint64 currentChainSelector
-    ) external nonZero(admin) nonZero(tokenAdminRegistry) initializer {
+    function initialize(address admin, address tokenAdminRegistry, address router, uint64 currentChainSelector)
+        external
+        nonZero(admin)
+        nonZero(tokenAdminRegistry)
+        initializer
+    {
         s_tokenAdminRegistry = ITokenAdminRegistryExtended(tokenAdminRegistry);
-        __CCIPSenderReceiverUpgradeable_init(router, rmnProxy, currentChainSelector);
+        __CCIPSenderReceiverUpgradeable_init(router, currentChainSelector);
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(PAUSER_ROLE, admin);
     }
@@ -113,7 +111,7 @@ contract TokenPoolFactory is
         external
         payable
     {
-        address actual = predictPool(
+        address actual = _predictPool(
             remote.std, remote.pt, msg.sender, local.chainSelector, remote.chainSelector, remote.token.toEVM()
         );
         if (remote.pool.toEVM() != actual) revert PredictAddressNotMatch(remote.pool.toEVM(), actual);
@@ -144,6 +142,14 @@ contract TokenPoolFactory is
         emit PoolConfigUpdated(msg.sender, std, pt, s_poolConfigs[std][pt]);
     }
 
+    function predictPool(Standard std, PoolType pt, address srcCreator, uint64 dstChainSelector, address token)
+        public
+        view
+        returns (address predicted)
+    {
+        return _predictPool(std, pt, srcCreator, s_currentChainSelector, dstChainSelector, token);
+    }
+
     function getDeployedPools(uint256 offset, uint256 limit)
         external
         view
@@ -160,17 +166,14 @@ contract TokenPoolFactory is
         }
     }
 
-    function getDeployConfig(
-        Standard std,
-        PoolType pt,
-        address srcCreator,
-        uint64 srcChainSelector,
-        uint64 dstChainSelector,
-        address token
-    ) external view returns (DeployConfig memory config) {
+    function getDeployConfig(Standard std, PoolType pt, address srcCreator, uint64 dstChainSelector, address token)
+        external
+        view
+        returns (DeployConfig memory config)
+    {
         config.std = std;
         config.pt = pt;
-        config.pool = toAny(predictPool(std, pt, srcCreator, srcChainSelector, dstChainSelector, token));
+        config.pool = toAny(_predictPool(std, pt, srcCreator, s_currentChainSelector, dstChainSelector, token));
         config.chainSelector = dstChainSelector;
         config.token = toAny(token);
         config.fixedGas = s_poolConfigs[std][pt]._fixedGas;
@@ -184,29 +187,6 @@ contract TokenPoolFactory is
 
     function getRemoteRouter(uint64 remoteChainSelector) public view returns (address) {
         return s_remoteRouters[remoteChainSelector];
-    }
-
-    function predictPool(
-        Standard std,
-        PoolType pt,
-        address srcCreator,
-        uint64 srcChainSelector,
-        uint64 dstChainSelector,
-        address token
-    ) public view nonZero(srcCreator) returns (address predicted) {
-        _requireNonZero(srcChainSelector);
-        address deployer =
-            dstChainSelector == s_currentChainSelector ? address(this) : getRemoteFactory(dstChainSelector);
-        address blueprint = s_poolConfigs[std][pt]._blueprint;
-        predicted = Clones.predictDeterministicAddress(
-            blueprint, _getSalt(std, pt, srcCreator, srcChainSelector, token), deployer
-        );
-
-        console.log("deployer address: ", deployer);
-        console.log("blueprint address: ", blueprint);
-        console.log("predicted address: ", predicted);
-        console.log("salt");
-        console.logBytes32(_getSalt(std, pt, srcCreator, srcChainSelector, token));
     }
 
     function estimateFee(address feeToken, Standard std, PoolType pt, uint64 remoteChainSelector)
@@ -256,13 +236,6 @@ contract TokenPoolFactory is
 
         address localPool = local.pool.toEVM();
         bytes32 salt = _getSalt(local.std, local.pt, srcCreator, srcChainSelector, local.token.toEVM());
-        // console.log("deployer address: ", deployer);
-        // console.log("blueprint address: ", blueprint);
-        // console.log("predicted address: ", predicted);
-        console.log("actual salt");
-        console.logBytes32(salt);
-        console.log("deployer address: ", address(this));
-        console.log("blueprint address: ", s_poolConfigs[local.std][local.pt]._blueprint);
 
         address actual = s_poolConfigs[local.std][local.pt]._blueprint.cloneDeterministic(salt);
         if (localPool != actual) revert PredictAddressNotMatch(localPool, actual);
@@ -273,7 +246,6 @@ contract TokenPoolFactory is
             fixedGas: local.fixedGas,
             dynamicGas: local.dynamicGas,
             router: address(s_router),
-            rmnProxy: address(s_rmnProxy),
             currentChainSelector: local.chainSelector
         });
         if (remote.pool.isNotNull()) {
@@ -289,6 +261,23 @@ contract TokenPoolFactory is
         s_deployedPools.add(localPool);
 
         emit PoolDeployed(msg.sender, localPool, srcChainSelector, salt);
+    }
+
+    function _predictPool(
+        Standard std,
+        PoolType pt,
+        address srcCreator,
+        uint64 srcChainSelector,
+        uint64 dstChainSelector,
+        address token
+    ) internal view nonZero(srcCreator) returns (address predicted) {
+        _requireNonZero(srcChainSelector);
+        address deployer =
+            dstChainSelector == s_currentChainSelector ? address(this) : getRemoteFactory(dstChainSelector);
+        address blueprint = s_poolConfigs[std][pt]._blueprint;
+        predicted = Clones.predictDeterministicAddress(
+            blueprint, _getSalt(std, pt, srcCreator, srcChainSelector, token), deployer
+        );
     }
 
     function _getSalt(Standard std, PoolType pt, address srcCreator, uint64 srcChainSelector, address token)
