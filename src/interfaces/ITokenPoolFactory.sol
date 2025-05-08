@@ -19,12 +19,10 @@ interface ITokenPoolFactory {
     }
 
     struct DeployConfig {
-        address blueprint;
-        address pool;
         address token;
-        uint32 fixedGas;
-        uint32 dynamicGas;
+        address blueprint;
         uint64 chainSelector;
+        address pool;
     }
 
     event BlueprintRemoved(address indexed by, address indexed blueprint);

@@ -125,6 +125,8 @@ contract TokenPoolFactory is
         external
         payable
     {
+        _deployPoolAndInit(msg.sender, local.chainSelector, local, remote);
+
         address actual =
             _predictPool(remote.blueprint, msg.sender, local.chainSelector, remote.chainSelector, remote.token);
         if (remote.pool != actual) revert PredictAddressNotMatch(remote.pool, actual);
@@ -137,8 +139,6 @@ contract TokenPoolFactory is
             allowOutOfOrderExecution: false,
             data: abi.encode(msg.sender, remote, local)
         });
-
-        _deployPoolAndInit(msg.sender, local.chainSelector, local, remote);
     }
 
     function predictPool(address blueprint, address srcCreator, uint64 dstChainSelector, address token)
@@ -188,12 +188,21 @@ contract TokenPoolFactory is
         view
         returns (DeployConfig memory config)
     {
-        config.blueprint = blueprint;
-        config.pool = _predictPool(blueprint, srcCreator, getCurrentChainSelector(), dstChainSelector, token);
-        config.chainSelector = dstChainSelector;
         config.token = token;
-        config.fixedGas = s_blueprintConfigs[blueprint]._fixedGas;
-        config.dynamicGas = s_blueprintConfigs[blueprint]._dynamicGas;
+        config.blueprint = blueprint;
+        config.chainSelector = dstChainSelector;
+        config.pool = _predictPool(blueprint, srcCreator, getCurrentChainSelector(), dstChainSelector, token);
+    }
+
+    function getBlueprintGasConfig(address blueprint)
+        public
+        view
+        onlySupported(blueprint)
+        returns (uint32 fixedGas, uint32 dynamicGas)
+    {
+        PoolConfig memory config = s_blueprintConfigs[blueprint];
+        fixedGas = config._fixedGas;
+        dynamicGas = config._dynamicGas;
     }
 
     function getRemoteFactory(uint64 remoteChainSelector)
@@ -254,10 +263,11 @@ contract TokenPoolFactory is
         address actual = local.blueprint.cloneDeterministic(salt);
         if (localPool != actual) revert PredictAddressNotMatch(localPool, actual);
 
+        (uint32 fixedGas, uint32 dynamicGas) = getBlueprintGasConfig(local.blueprint);
         ITokenPoolCallback(localPool).initialize({
             admin: address(this),
-            fixedGas: local.fixedGas,
-            dynamicGas: local.dynamicGas,
+            fixedGas: fixedGas,
+            dynamicGas: dynamicGas,
             router: address(getRouter()),
             currentChainSelector: local.chainSelector
         });
@@ -293,12 +303,14 @@ contract TokenPoolFactory is
 
     function _getSalt(address srcCreator, uint64 srcChainSelector, address token)
         internal
-        pure
+        view
         nonZero(token)
         nonZero(srcCreator)
         returns (bytes32 salt)
     {
-        _requireNonZero(srcChainSelector);
+        if (!(isLocalChain(srcChainSelector) || isSupportedChain(srcChainSelector))) {
+            revert NonExistentChain(srcChainSelector);
+        }
         salt = keccak256(abi.encode(srcCreator, srcChainSelector, token));
     }
 

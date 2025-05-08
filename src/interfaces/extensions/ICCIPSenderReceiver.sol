@@ -33,6 +33,8 @@ interface ICCIPSenderReceiver is IAny2EVMMessageReceiver, IERC165 {
 
     function getFeeTokens(uint64 remoteChainSelector) external view returns (address[] memory feeTokens);
 
+    function isLocalChain(uint64 currentChainSelector) external view returns (bool yes);
+
     function isSupportedChain(uint64 remoteChainSelector) external view returns (bool yes);
 
     function getSupportedChains() external view returns (uint64[] memory remoteChainSelectors);

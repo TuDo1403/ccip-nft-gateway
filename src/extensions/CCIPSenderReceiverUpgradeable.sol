@@ -102,6 +102,10 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         return IEVM2EVMOnRamp(s_router.getOnRamp(remoteChainSelector)).getDynamicConfig().priceRegistry.getFeeTokens();
     }
 
+    function isLocalChain(uint64 currentChainSelector) public view returns (bool yes) {
+        return currentChainSelector == s_currentChainSelector;
+    }
+
     function isSupportedChain(uint64 remoteChainSelector) public view returns (bool yes) {
         return s_remoteChainSelectors.contains(remoteChainSelector);
     }
