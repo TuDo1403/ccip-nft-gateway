@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-interface ITokenPool {
+import {ITypeAndVersion} from "@chainlink/contracts-ccip/src/v0.8/shared/interfaces/ITypeAndVersion.sol";
+
+interface ITokenPool is ITypeAndVersion {
     event GasLimitConfigured(address indexed by, uint32 fixedGas, uint32 dynamicGas);
     event RemotePoolAdded(address indexed by, uint64 indexed remoteChainSelector, address indexed remotePool);
     event RemotePoolRemoved(address indexed by, uint64 indexed remoteChainSelector);

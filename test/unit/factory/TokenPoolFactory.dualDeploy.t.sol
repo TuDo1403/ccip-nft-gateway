@@ -1,180 +1,165 @@
-// // SPDX-License-Identifier: UNLICENSED
-// pragma solidity ^0.8.0;
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.0;
 
-// import {Test} from "forge-std/Test.sol";
-// import {TokenPoolFactory} from "src/TokenPoolFactory.sol";
-// import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
-// import {LockMintERC721TokenPool} from "src/pools/erc721/LockMintERC721TokenPool.sol";
-// import {CCIPLocalSimulator} from "test/mocks/CCIPLocalSimulator.sol";
-// import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
-// import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
-// import {, address} from "src/libraries/address.sol";
-// import {ITokenPoolFactory} from "src/interfaces/ITokenPoolFactory.sol";
-// import {MockERC721Mintable} from "test/mocks/MockERC721Mintable.sol";
+import {Test} from "forge-std/Test.sol";
+import {TokenPoolFactory} from "src/TokenPoolFactory.sol";
+import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import {SingleLockMintERC721Pool} from "src/pools/erc721/SingleLockMintERC721Pool.sol";
+import {CCIPLocalSimulator} from "test/mocks/CCIPLocalSimulator.sol";
+import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
+import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
+import {ITokenPoolFactory} from "src/interfaces/ITokenPoolFactory.sol";
+import {MockERC721Mintable} from "test/mocks/MockERC721Mintable.sol";
 
-// contract TokenPoolFactory_DualDeployTest is Test {
-//     address admin = makeAddr("admin");
-//     address beaconOwner = makeAddr("beaconOwner");
+contract TokenPoolFactory_DualDeployTest is Test {
+    address admin = makeAddr("admin");
+    address beaconOwner = makeAddr("beaconOwner");
 
-//     CCIPLocalSimulator localSimulator = new CCIPLocalSimulator();
+    uint64 currentChainSelector = uint64(vm.unixTime());
+    uint64 remoteChainSelector = uint64(~vm.unixTime());
 
-//     address alice = makeAddr("alice");
-//     address bob = makeAddr("bob");
+    CCIPLocalSimulator localSimulator = new CCIPLocalSimulator();
 
-//     TokenPoolFactory localFactory;
-//     TokenPoolFactory remoteFactory;
+    address alice = makeAddr("alice");
+    address bob = makeAddr("bob");
 
-//     MockERC721Mintable localToken = new MockERC721Mintable("LocalToken", "LT");
-//     MockERC721Mintable remoteToken = new MockERC721Mintable("RemoteToken", "RT");
+    TokenPoolFactory localFactory;
+    TokenPoolFactory remoteFactory;
 
-//     uint64 currentChainSelector = localSimulator.currentChainSelector();
-//     uint64 remoteChainSelector = localSimulator.remoteChainSelector();
+    MockERC721Mintable localToken = new MockERC721Mintable("LocalToken", "LT");
+    MockERC721Mintable remoteToken = new MockERC721Mintable("RemoteToken", "RT");
 
-//     address blueprint = _createBlueprint(type(LockMintERC721TokenPool).creationCode);
+    address blueprint = _createBlueprint(type(SingleLockMintERC721Pool).creationCode);
 
-//     uint32 deployGas = 2_000_000;
-//     uint32 fixedGas = 200_000;
-//     uint32 dynamicGas = 100_000;
+    uint32 deployGas = 2_000_000;
+    uint32 fixedGas = 200_000;
+    uint32 dynamicGas = 100_000;
 
-//     function setUp() public {
-//         localFactory = TokenPoolFactory(
-//             address(
-//                 new TransparentUpgradeableProxy(
-//                     address(new TokenPoolFactory()),
-//                     admin,
-//                     abi.encodeCall(
-//                         TokenPoolFactory.initialize,
-//                         (
-//                             admin,
-//                             address(localSimulator.tokenAdminRegistry()),
-//                             address(localSimulator.router()),
-//                             currentChainSelector
-//                         )
-//                     )
-//                 )
-//             )
-//         );
+    function setUp() public {
+        localSimulator.supportChain(currentChainSelector);
+        localSimulator.supportChain(remoteChainSelector);
+        
+        localFactory = TokenPoolFactory(
+            address(
+                new TransparentUpgradeableProxy(
+                    address(new TokenPoolFactory()),
+                    admin,
+                    abi.encodeCall(
+                        TokenPoolFactory.initialize,
+                        (
+                            admin,
+                            address(localSimulator.tokenAdminRegistry()),
+                            address(localSimulator.router()),
+                            currentChainSelector
+                        )
+                    )
+                )
+            )
+        );
 
-//         remoteFactory = TokenPoolFactory(
-//             address(
-//                 new TransparentUpgradeableProxy(
-//                     address(new TokenPoolFactory()),
-//                     admin,
-//                     abi.encodeCall(
-//                         TokenPoolFactory.initialize,
-//                         (
-//                             admin,
-//                             address(localSimulator.tokenAdminRegistry()),
-//                             address(localSimulator.router()),
-//                             remoteChainSelector
-//                         )
-//                     )
-//                 )
-//             )
-//         );
+        remoteFactory = TokenPoolFactory(
+            address(
+                new TransparentUpgradeableProxy(
+                    address(new TokenPoolFactory()),
+                    admin,
+                    abi.encodeCall(
+                        TokenPoolFactory.initialize,
+                        (
+                            admin,
+                            address(localSimulator.tokenAdminRegistry()),
+                            address(localSimulator.router()),
+                            remoteChainSelector
+                        )
+                    )
+                )
+            )
+        );
 
-//         vm.label(address(localFactory), "LocalFactory");
-//         vm.label(address(remoteFactory), "RemoteFactory");
+        vm.label(address(localFactory), "LocalFactory");
+        vm.label(address(remoteFactory), "RemoteFactory");
 
-//         vm.startPrank(admin);
-//         // Local Setup
-//         localFactory.addRemoteFactory(remoteChainSelector, address(remoteFactory), address(localSimulator.router()));
-//         localFactory.updatePoolConfig(
-//             ITokenPoolFactory.Standard.ERC721,
-//             ITokenPoolFactory.PoolType.LockMint,
-//             deployGas,
-//             fixedGas,
-//             dynamicGas,
-//             blueprint
-//         );
-//         // Remote Setup
-//         remoteFactory.addRemoteFactory(currentChainSelector, address(localFactory), address(localSimulator.router()));
-//         remoteFactory.updatePoolConfig(
-//             ITokenPoolFactory.Standard.ERC721,
-//             ITokenPoolFactory.PoolType.LockMint,
-//             deployGas,
-//             fixedGas,
-//             dynamicGas,
-//             blueprint
-//         );
-//         vm.stopPrank();
-//     }
+        vm.startPrank(admin);
+        // Local Setup
+        localFactory.addRemoteFactory(remoteChainSelector, address(remoteFactory));
+        localFactory.addBlueprint(blueprint, deployGas, fixedGas, dynamicGas);
+        // Remote Setup
+        remoteFactory.addRemoteFactory(currentChainSelector, address(localFactory));
+        remoteFactory.addBlueprint(blueprint, deployGas, fixedGas, dynamicGas);
+        vm.stopPrank();
+        localSimulator.switchChain(currentChainSelector);
+    }
 
-//     function test_Setup() external {}
+    function testConcrete_DualDeploy() external {
+        ITokenPoolFactory.DeployConfig memory local =
+            localFactory.getDeployConfig(blueprint, alice, currentChainSelector, address(localToken));
+        ITokenPoolFactory.DeployConfig memory remote =
+            localFactory.getDeployConfig(blueprint, alice, remoteChainSelector, address(remoteToken));
 
-//     function testConcrete_DualDeploy() external {
-//         ITokenPoolFactory.Standard std = ITokenPoolFactory.Standard.ERC721;
-//         ITokenPoolFactory.PoolType pt = ITokenPoolFactory.PoolType.LockMint;
+        address[] memory feeTokens = localFactory.getFeeTokens(remoteChainSelector);
+        assertTrue(feeTokens.length > 0, "Fee tokens length mismatch");
 
-//         ITokenPoolFactory.DeployConfig memory local =
-//             localFactory.getDeployConfig(std, pt, alice, currentChainSelector, address(localToken));
-//         ITokenPoolFactory.DeployConfig memory remote =
-//             localFactory.getDeployConfig(std, pt, alice, remoteChainSelector, address(remoteToken));
+        uint256 fee = localFactory.estimateFee(address(0), blueprint, remoteChainSelector);
+        assertTrue(fee > 0, "Fee should be greater than 0");
 
-//         address[] memory feeTokens = localFactory.getFeeTokens(remoteChainSelector);
-//         assertTrue(feeTokens.length > 0, "Fee tokens length mismatch");
+        deal(alice, fee);
+        vm.prank(alice);
+        localFactory.dualDeployPool{value: fee}(address(0), local, remote);
 
-//         uint256 fee = localFactory.estimateFee(address(0), std, pt, remoteChainSelector);
-//         assertTrue(fee > 0, "Fee should be greater than 0");
+        assertTrue(local.pool.code.length > 0, "Local pool code length mismatch");
+        assertTrue(remote.pool.code.length > 0, "Remote pool code length mismatch");
+        assertEq(local.pool.codehash, remote.pool.codehash, "Pool code mismatch");
 
-//         deal(alice, fee);
-//         vm.prank(alice);
-//         localFactory.dualDeployPool{value: fee}(address(0), local, remote);
+        SingleLockMintERC721Pool localPool = SingleLockMintERC721Pool(local.pool);
+        SingleLockMintERC721Pool remotePool = SingleLockMintERC721Pool(remote.pool);
 
-//         assertTrue(local.pool.code.length > 0, "Local pool code length mismatch");
-//         assertTrue(remote.pool.code.length > 0, "Remote pool code length mismatch");
-//         assertEq(local.pool.codehash, remote.pool.codehash, "Pool code mismatch");
+        vm.label(address(localPool), "LocalPool");
+        vm.label(address(remotePool), "RemotePool");
 
-//         LockMintERC721TokenPool localPool = LockMintERC721TokenPool(local.pool);
-//         LockMintERC721TokenPool remotePool = LockMintERC721TokenPool(remote.pool);
+        assertTrue(localPool.isSupportedChain(remoteChainSelector), "Local pool supported chain mismatch");
+        assertTrue(remotePool.isSupportedChain(currentChainSelector), "Remote pool supported chain mismatch");
 
-//         vm.label(address(localPool), "LocalPool");
-//         vm.label(address(remotePool), "RemotePool");
+        uint256 id = vm.unixTime();
+        localToken.mint(alice, id);
+        fee = localPool.estimateFee(address(0), remoteChainSelector, 1);
+        deal(alice, fee);
 
-//         assertTrue(localPool.isSupportedChain(remoteChainSelector), "Local pool supported chain mismatch");
-//         assertTrue(remotePool.isSupportedChain(currentChainSelector), "Remote pool supported chain mismatch");
+        vm.startPrank(alice);
+        localToken.approve(address(localPool), id);
+        localPool.crossBatchTransfer{value: fee}(remoteChainSelector, (bob), _toSingleton(id), address(0));
+        vm.stopPrank();
 
-//         uint256 id = vm.unixTime();
-//         localToken.mint(alice, id);
-//         fee = localPool.estimateFee(address(0), remoteChainSelector, 1);
-//         deal(alice, fee);
+        assertEq(localToken.ownerOf(id), address(localPool), "Local token owner mismatch");
+        assertEq(remoteToken.ownerOf(id), bob, "Remote token owner mismatch");
 
-//         vm.startPrank(alice);
-//         localToken.approve(address(localPool), id);
-//         localPool.crossBatchTransfer{value: fee}(remoteChainSelector, (bob), _toSingleton(id), address(0));
-//         vm.stopPrank();
+        fee = remotePool.estimateFee(address(0), currentChainSelector, 1);
+        deal(bob, fee);
 
-//         assertEq(localToken.ownerOf(id), address(localPool), "Local token owner mismatch");
-//         assertEq(remoteToken.ownerOf(id), bob, "Remote token owner mismatch");
+        localSimulator.switchChain(remoteChainSelector);
+        vm.startPrank(bob);
+        remoteToken.approve(address(remotePool), id);
+        remotePool.crossBatchTransfer{value: fee}(currentChainSelector, (alice), _toSingleton(id), address(0));
+        vm.stopPrank();
 
-//         fee = remotePool.estimateFee(address(0), currentChainSelector, 1);
-//         deal(bob, fee);
+        assertEq(remoteToken.ownerOf(id), address(remotePool), "Remote token owner mismatch");
+        assertEq(localToken.ownerOf(id), alice, "Local token owner mismatch");
+    }
 
-//         // vm.startPrank(bob);
-//         // remoteToken.approve(address(remotePool), id);
-//         // remotePool.crossBatchTransfer{value: fee}(currentChainSelector, (alice), _toSingleton(id), address(0));
-//         // vm.stopPrank();
+    function _toSingleton(uint256 id) internal pure returns (uint256[] memory) {
+        uint256[] memory singleton = new uint256[](1);
+        singleton[0] = id;
+        return singleton;
+    }
 
-//         // assertEq(remoteToken.ownerOf(id), address(remotePool), "Remote token owner mismatch");
-//         // assertEq(localToken.ownerOf(id), alice, "Local token owner mismatch");
-//     }
+    function _createBlueprint(bytes memory bytecode) internal returns (address) {
+        address logic;
+        assembly {
+            logic := create(0, add(bytecode, 0x20), mload(bytecode))
+        }
+        require(logic != address(0) && logic.code.length > 0, "Failed to deploy logic");
 
-//     function _toSingleton(uint256 id) internal pure returns (uint256[] memory) {
-//         uint256[] memory singleton = new uint256[](1);
-//         singleton[0] = id;
-//         return singleton;
-//     }
+        UpgradeableBeacon beacon = new UpgradeableBeacon(logic, beaconOwner);
+        BeaconProxy proxy = new BeaconProxy(address(beacon), "");
 
-//     function _createBlueprint(bytes memory bytecode) internal returns (address) {
-//         address logic;
-//         assembly {
-//             logic := create(0, add(bytecode, 0x20), mload(bytecode))
-//         }
-//         require(logic != address(0) && logic.code.length > 0, "Failed to deploy logic");
-
-//         UpgradeableBeacon beacon = new UpgradeableBeacon(logic, beaconOwner);
-//         BeaconProxy proxy = new BeaconProxy(address(beacon), "");
-
-//         return address(proxy);
-//     }
-// }
+        return address(proxy);
+    }
+}

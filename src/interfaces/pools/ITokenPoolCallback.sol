@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
+import {ITypeAndVersion} from "lib/ccip/contracts/src/v0.8/shared/interfaces/ITypeAndVersion.sol";
+
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
-interface ITokenPoolCallback is IAccessControl {
+interface ITokenPoolCallback is IAccessControl, ITypeAndVersion {
     function initialize(address admin, uint32 fixedGas, uint32 dynamicGas, address router, uint64 currentChainSelector)
         external;
 

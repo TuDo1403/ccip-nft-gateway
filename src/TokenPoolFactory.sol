@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
+import {ITypeAndVersion} from "@chainlink/contracts-ccip/src/v0.8/shared/interfaces/ITypeAndVersion.sol";
 import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
 
 import {AccessControlEnumerableUpgradeable} from
@@ -30,11 +31,11 @@ contract TokenPoolFactory is
 
     ITokenAdminRegistryExtended internal s_tokenAdminRegistry;
     EnumerableSet.AddressSet internal s_deployedPools;
-    mapping(uint64 remoteChainSelector => address router) internal s_remoteRouters;
-    mapping(Standard std => mapping(PoolType pt => PoolConfig config)) internal s_poolConfigs;
+    EnumerableSet.AddressSet internal s_blueprints;
+    mapping(address blueprint => PoolConfig config) internal s_blueprintConfigs;
 
-    modifier onlySupported(Standard std, PoolType pt) {
-        _requireSupport(std, pt);
+    modifier onlySupported(address blueprint) {
+        _requireSupport(blueprint);
         _;
     }
 
@@ -62,32 +63,45 @@ contract TokenPoolFactory is
         _unpause();
     }
 
-    function addRemoteFactory(uint64 remoteChainSelector, address factory, address router)
-        external
-        nonZero(router)
-        onlyRole(DEFAULT_ADMIN_ROLE)
-    {
-        s_remoteRouters[remoteChainSelector] = router;
+    function addRemoteFactory(uint64 remoteChainSelector, address factory) external onlyRole(DEFAULT_ADMIN_ROLE) {
         _addRemoteChain(remoteChainSelector, factory);
-
-        emit RemotePoolAdded(msg.sender, remoteChainSelector, factory, router);
+        emit RemoteFactoryAdded(msg.sender, remoteChainSelector, factory);
     }
 
     function removeRemoteFactory(uint64 remoteChainSelector) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        delete s_remoteRouters[remoteChainSelector];
         _removeRemoteChain(remoteChainSelector);
-
-        emit RemotePoolRemoved(msg.sender, remoteChainSelector);
+        emit RemoteFactoryRemoved(msg.sender, remoteChainSelector);
     }
 
-    function claimAdminPool(address pool, address token) external {
-        if (!s_deployedPools.contains(pool)) revert NotTokenPool(pool);
+    function addBlueprint(address blueprint, uint32 deployGas, uint32 fixedGas, uint32 dynamicGas)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        nonZero(blueprint)
+    {
+        _requireNonZero(deployGas);
+        _requireNonZero(fixedGas);
+        _requireNonZero(dynamicGas);
 
+        if (!s_blueprints.add(blueprint)) revert BlueprintAlreadyAdded(blueprint);
+
+        PoolConfig memory config = PoolConfig({_deployGas: deployGas, _fixedGas: fixedGas, _dynamicGas: dynamicGas});
+        s_blueprintConfigs[blueprint] = config;
+
+        emit BlueprintAdded(msg.sender, blueprint, config, ITypeAndVersion(blueprint).typeAndVersion());
+    }
+
+    function removeBlueprint(address blueprint) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (!s_blueprints.remove(blueprint)) revert BlueprintNotAdded(blueprint);
+        delete s_blueprintConfigs[blueprint];
+        emit BlueprintRemoved(msg.sender, blueprint);
+    }
+
+    function claimAdminPool(address pool, address token) external whenNotPaused {
+        if (!s_deployedPools.contains(pool)) revert NotTokenPool(pool);
         if (!ITokenPoolCallback(pool).isSupportedToken(token)) revert Unauthorized(msg.sender);
         ITokenAdminRegistryExtended.TokenConfig memory config = s_tokenAdminRegistry.getTokenConfig(token);
         if (config.administrator != msg.sender) revert Unauthorized(msg.sender);
         if (config.tokenPool != pool) revert NotTokenPool(pool);
-
         if (!ITokenPoolCallback(pool).hasRole(DEFAULT_ADMIN_ROLE, address(this))) {
             revert AlreadyClaimedAdmin(pool, msg.sender);
         }
@@ -112,14 +126,14 @@ contract TokenPoolFactory is
         payable
     {
         address actual =
-            _predictPool(remote.std, remote.pt, msg.sender, local.chainSelector, remote.chainSelector, remote.token);
+            _predictPool(remote.blueprint, msg.sender, local.chainSelector, remote.chainSelector, remote.token);
         if (remote.pool != actual) revert PredictAddressNotMatch(remote.pool, actual);
 
         _sendDataPayFeeToken({
             remoteChainSelector: remote.chainSelector,
             receiver: getRemoteFactory(remote.chainSelector),
             feeToken: feeToken,
-            gasLimit: s_poolConfigs[remote.std][remote.pt]._deployGas,
+            gasLimit: s_blueprintConfigs[remote.blueprint]._deployGas,
             allowOutOfOrderExecution: false,
             data: abi.encode(msg.sender, remote, local)
         });
@@ -127,26 +141,12 @@ contract TokenPoolFactory is
         _deployPoolAndInit(msg.sender, local.chainSelector, local, remote);
     }
 
-    function updatePoolConfig(
-        Standard std,
-        PoolType pt,
-        uint32 deployGas,
-        uint32 fixedGas,
-        uint32 dynamicGas,
-        address blueprint
-    ) external onlySupported(std, pt) onlyRole(DEFAULT_ADMIN_ROLE) nonZero(blueprint) {
-        s_poolConfigs[std][pt] =
-            PoolConfig({_deployGas: deployGas, _fixedGas: fixedGas, _dynamicGas: dynamicGas, _blueprint: blueprint});
-
-        emit PoolConfigUpdated(msg.sender, std, pt, s_poolConfigs[std][pt]);
-    }
-
-    function predictPool(Standard std, PoolType pt, address srcCreator, uint64 dstChainSelector, address token)
+    function predictPool(address blueprint, address srcCreator, uint64 dstChainSelector, address token)
         public
         view
         returns (address predicted)
     {
-        return _predictPool(std, pt, srcCreator, getCurrentChainSelector(), dstChainSelector, token);
+        return _predictPool(blueprint, srcCreator, getCurrentChainSelector(), dstChainSelector, token);
     }
 
     function getDeployedPools(uint256 offset, uint256 limit)
@@ -165,18 +165,35 @@ contract TokenPoolFactory is
         }
     }
 
-    function getDeployConfig(Standard std, PoolType pt, address srcCreator, uint64 dstChainSelector, address token)
+    function isSupportedBlueprint(address blueprint) public view returns (bool) {
+        return s_blueprints.contains(blueprint);
+    }
+
+    function getSupportedBlueprints()
+        external
+        view
+        returns (address[] memory blueprints, string[] memory typesAndVersions)
+    {
+        blueprints = s_blueprints.values();
+        uint256 length = blueprints.length;
+
+        typesAndVersions = new string[](length);
+        for (uint256 i; i < length; ++i) {
+            typesAndVersions[i] = ITypeAndVersion(blueprints[i]).typeAndVersion();
+        }
+    }
+
+    function getDeployConfig(address blueprint, address srcCreator, uint64 dstChainSelector, address token)
         external
         view
         returns (DeployConfig memory config)
     {
-        config.std = std;
-        config.pt = pt;
-        config.pool = _predictPool(std, pt, srcCreator, getCurrentChainSelector(), dstChainSelector, token);
+        config.blueprint = blueprint;
+        config.pool = _predictPool(blueprint, srcCreator, getCurrentChainSelector(), dstChainSelector, token);
         config.chainSelector = dstChainSelector;
-        config.token = (token);
-        config.fixedGas = s_poolConfigs[std][pt]._fixedGas;
-        config.dynamicGas = s_poolConfigs[std][pt]._dynamicGas;
+        config.token = token;
+        config.fixedGas = s_blueprintConfigs[blueprint]._fixedGas;
+        config.dynamicGas = s_blueprintConfigs[blueprint]._dynamicGas;
     }
 
     function getRemoteFactory(uint64 remoteChainSelector)
@@ -188,22 +205,18 @@ contract TokenPoolFactory is
         return _getRemoteSender(remoteChainSelector);
     }
 
-    function getRemoteRouter(uint64 remoteChainSelector) public view returns (address) {
-        return s_remoteRouters[remoteChainSelector];
-    }
-
-    function estimateFee(address feeToken, Standard std, PoolType pt, uint64 remoteChainSelector)
+    function estimateFee(address feeToken, address blueprint, uint64 remoteChainSelector)
         external
         view
-        onlySupported(std, pt)
+        onlySupported(blueprint)
         returns (uint256 fee)
     {
         DeployConfig memory empty;
         (fee,) = _getSendDataFee({
             remoteChainSelector: remoteChainSelector,
-            receiver: (getRemoteFactory(remoteChainSelector)),
+            receiver: getRemoteFactory(remoteChainSelector),
             feeToken: feeToken,
-            gasLimit: s_poolConfigs[std][pt]._deployGas,
+            gasLimit: s_blueprintConfigs[blueprint]._deployGas,
             allowOutOfOrderExecution: false,
             data: abi.encode(empty, empty)
         });
@@ -222,7 +235,9 @@ contract TokenPoolFactory is
     function _ccipReceive(Client.Any2EVMMessage calldata message) internal virtual override whenNotPaused {
         (address srcCreator, DeployConfig memory local, DeployConfig memory remote) =
             abi.decode(message.data, (address, DeployConfig, DeployConfig));
-        assert(message.sourceChainSelector == remote.chainSelector);
+        if (message.sourceChainSelector != remote.chainSelector) {
+            revert RemoteChainNotMatch(message.sourceChainSelector, remote.chainSelector);
+        }
 
         _deployPoolAndInit(srcCreator, message.sourceChainSelector, local, remote);
     }
@@ -232,11 +247,11 @@ contract TokenPoolFactory is
         uint64 srcChainSelector,
         DeployConfig memory local,
         DeployConfig memory remote
-    ) internal onlyLocalChain(local.chainSelector) whenNotPaused {
+    ) internal onlyLocalChain(local.chainSelector) whenNotPaused onlySupported(local.blueprint) {
         address localPool = local.pool;
-        bytes32 salt = _getSalt(local.std, local.pt, srcCreator, srcChainSelector, local.token);
+        bytes32 salt = _getSalt(srcCreator, srcChainSelector, local.token);
 
-        address actual = s_poolConfigs[local.std][local.pt]._blueprint.cloneDeterministic(salt);
+        address actual = local.blueprint.cloneDeterministic(salt);
         if (localPool != actual) revert PredictAddressNotMatch(localPool, actual);
 
         ITokenPoolCallback(localPool).initialize({
@@ -265,34 +280,29 @@ contract TokenPoolFactory is
     }
 
     function _predictPool(
-        Standard std,
-        PoolType pt,
+        address blueprint,
         address srcCreator,
         uint64 srcChainSelector,
         uint64 dstChainSelector,
         address token
-    ) internal view nonZero(srcCreator) returns (address predicted) {
-        _requireNonZero(srcChainSelector);
+    ) internal view nonZero(srcCreator) onlySupported(blueprint) returns (address predicted) {
         address deployer =
             dstChainSelector == getCurrentChainSelector() ? address(this) : getRemoteFactory(dstChainSelector);
-        address blueprint = s_poolConfigs[std][pt]._blueprint;
-        predicted = Clones.predictDeterministicAddress(
-            blueprint, _getSalt(std, pt, srcCreator, srcChainSelector, token), deployer
-        );
+        predicted = blueprint.predictDeterministicAddress(_getSalt(srcCreator, srcChainSelector, token), deployer);
     }
 
-    function _getSalt(Standard std, PoolType pt, address srcCreator, uint64 srcChainSelector, address token)
+    function _getSalt(address srcCreator, uint64 srcChainSelector, address token)
         internal
         pure
         nonZero(token)
-        onlySupported(std, pt)
+        nonZero(srcCreator)
         returns (bytes32 salt)
     {
-        salt = keccak256(abi.encode(std, pt, srcCreator, srcChainSelector, token));
+        _requireNonZero(srcChainSelector);
+        salt = keccak256(abi.encode(srcCreator, srcChainSelector, token));
     }
 
-    function _requireSupport(Standard std, PoolType pt) internal pure {
-        if (std == Standard.Unknown) revert StandardNotSupported(std);
-        if (pt == PoolType.Unknown) revert PoolTypeNotSupported(pt);
+    function _requireSupport(address blueprint) internal view {
+        if (!isSupportedBlueprint(blueprint)) revert BlueprintNotSupported(blueprint);
     }
 }

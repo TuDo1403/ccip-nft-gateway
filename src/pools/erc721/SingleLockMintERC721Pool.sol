@@ -10,7 +10,9 @@ import {LockMintERC721Pool} from "src/pools/erc721/LockMintERC721Pool.sol";
 import {ISingleLockMintERC721Pool} from "src/interfaces/pools/erc721/ISingleLockMintERC721Pool.sol";
 import {Pool} from "src/libraries/Pool.sol";
 
-contract SingleLockMintERC721TokenPool is LockMintERC721Pool, SingleTokenPool, ISingleLockMintERC721Pool {
+contract SingleLockMintERC721Pool is LockMintERC721Pool, SingleTokenPool, ISingleLockMintERC721Pool {
+    string public constant override typeAndVersion = "SingleLockMintERC721Pool 1.0.0";
+    
     constructor() {
         _disableInitializers();
     }

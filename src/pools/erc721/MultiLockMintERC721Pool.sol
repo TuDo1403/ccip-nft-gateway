@@ -11,6 +11,8 @@ import {IMultiLockMintERC721Pool} from "src/interfaces/pools/erc721/IMultiLockMi
 import {Pool} from "src/libraries/Pool.sol";
 
 contract MultiLockMintERC721Pool is LockMintERC721Pool, MultiTokenPool, IMultiLockMintERC721Pool {
+    string public constant override typeAndVersion = "MultiLockMintERC721Pool 1.0.0";
+
     constructor() {
         _disableInitializers();
     }
