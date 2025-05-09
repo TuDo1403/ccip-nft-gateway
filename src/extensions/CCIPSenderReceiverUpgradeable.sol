@@ -147,7 +147,8 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
      * it at the time of execution (EXTCODESIZE returns 0), only tokens will be transferred.
      */
     function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
-        return interfaceId == type(IAny2EVMMessageReceiver).interfaceId || interfaceId == type(IERC165).interfaceId;
+        return interfaceId == type(ICCIPSenderReceiver).interfaceId
+            || interfaceId == type(IAny2EVMMessageReceiver).interfaceId || interfaceId == type(IERC165).interfaceId;
     }
 
     /**

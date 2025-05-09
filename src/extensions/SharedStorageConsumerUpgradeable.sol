@@ -25,12 +25,13 @@ abstract contract SharedStorageConsumerUpgradeable is AccessControlEnumerableUpg
         _grantRole(SHARED_STORAGE_SETTER_ROLE, sharedStorageSetter);
     }
 
-    function setSharedStorage(address sharedStorage, bool shouldAdd)
-        external
-        onlyRole(SHARED_STORAGE_SETTER_ROLE)
-    {
+    function setSharedStorage(address sharedStorage, bool shouldAdd) external onlyRole(SHARED_STORAGE_SETTER_ROLE) {
         s_sharedStorage[sharedStorage] = shouldAdd;
         emit SharedStorageUpdated(msg.sender, sharedStorage, shouldAdd);
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return interfaceId == type(ISharedStorageConsumer).interfaceId || super.supportsInterface(interfaceId);
     }
 
     function isSharedStorage(address sharedStorage) public view returns (bool yes) {

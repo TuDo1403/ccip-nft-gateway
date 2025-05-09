@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
+import {ITypeAndVersion} from "@chainlink/contracts-ccip/src/v0.8/shared/interfaces/ITypeAndVersion.sol";
+
 import {AccessControlEnumerableUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 
@@ -53,6 +55,7 @@ abstract contract TokenPool is AccessControlEnumerableUpgradeable, CCIPSenderRec
     function mapRemoteToken(address localToken, uint64 remoteChainSelector, address remoteToken)
         external
         onlyRole(TOKEN_POOL_OWNER_ROLE)
+        nonZero(localToken)
         onlyEnabledChain(remoteChainSelector)
     {
         _requireNonZero(remoteToken);
@@ -73,12 +76,7 @@ abstract contract TokenPool is AccessControlEnumerableUpgradeable, CCIPSenderRec
         _setGasLimitConfig(fixedGas, dynamicGas);
     }
 
-    function getRemotePool(uint64 remoteChainSelector)
-        public
-        view
-        onlyEnabledChain(remoteChainSelector)
-        returns (address remotePool)
-    {
+    function getRemotePool(uint64 remoteChainSelector) public view returns (address remotePool) {
         return _getRemoteSender(remoteChainSelector);
     }
 
@@ -107,7 +105,8 @@ abstract contract TokenPool is AccessControlEnumerableUpgradeable, CCIPSenderRec
         override(AccessControlEnumerableUpgradeable, CCIPSenderReceiverUpgradeable)
         returns (bool)
     {
-        return interfaceId == type(ITokenPool).interfaceId || super.supportsInterface(interfaceId);
+        return interfaceId == type(ITypeAndVersion).interfaceId || interfaceId == type(ITokenPool).interfaceId
+            || super.supportsInterface(interfaceId);
     }
 
     function _lockOrBurn(Pool.LockOrBurn memory lockOrBurn) internal virtual;
@@ -119,6 +118,9 @@ abstract contract TokenPool is AccessControlEnumerableUpgradeable, CCIPSenderRec
     function _unmapRemoteToken(address localToken, uint64 remoteChainSelector) internal virtual;
 
     function _setGasLimitConfig(uint32 fixedGas, uint32 dynamicGas) internal {
+        _requireNonZero(fixedGas);
+        _requireNonZero(dynamicGas);
+
         s_fixedGas = fixedGas;
         s_dynamicGas = dynamicGas;
 

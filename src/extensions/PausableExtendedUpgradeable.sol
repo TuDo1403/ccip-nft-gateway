@@ -38,6 +38,10 @@ abstract contract PausableExtendedUpgradeable is
         _unpause();
     }
 
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return interfaceId == type(IPausableExtended).interfaceId || super.supportsInterface(interfaceId);
+    }
+
     function getGlobalPauser() external view returns (address globalPauser) {
         return s_globalPauser;
     }

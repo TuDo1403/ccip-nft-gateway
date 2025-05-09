@@ -10,7 +10,7 @@ import {LockMintERC721Pool} from "src/pools/erc721/LockMintERC721Pool.sol";
 import {IMultiLockMintERC721Pool} from "src/interfaces/pools/erc721/IMultiLockMintERC721Pool.sol";
 import {Pool} from "src/libraries/Pool.sol";
 
-contract MultiLockMintERC721Pool is LockMintERC721Pool, MultiTokenPool, IMultiLockMintERC721Pool {
+contract MultiLockMintERC721Pool is MultiTokenPool, LockMintERC721Pool, IMultiLockMintERC721Pool {
     string public constant override typeAndVersion = "MultiLockMintERC721Pool 1.0.0";
 
     constructor() {
@@ -62,10 +62,11 @@ contract MultiLockMintERC721Pool is LockMintERC721Pool, MultiTokenPool, IMultiLo
         public
         view
         virtual
-        override(TokenPool, LockMintERC721Pool)
+        override(MultiTokenPool, LockMintERC721Pool)
         returns (bool)
     {
-        return interfaceId == type(IMultiLockMintERC721Pool).interfaceId || super.supportsInterface(interfaceId);
+        return interfaceId == type(IMultiLockMintERC721Pool).interfaceId
+            || LockMintERC721Pool.supportsInterface(interfaceId) || MultiTokenPool.supportsInterface(interfaceId);
     }
 
     function _crossBatchTransfer(

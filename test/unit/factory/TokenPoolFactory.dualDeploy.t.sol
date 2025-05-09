@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {TokenPoolFactory} from "src/TokenPoolFactory.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {SingleLockMintERC721Pool} from "src/pools/erc721/SingleLockMintERC721Pool.sol";
-import {CCIPLocalSimulator} from "test/mocks/CCIPLocalSimulator.sol";
+import {CCIPLocalSimulator} from "test/simulators/CCIPLocalSimulator.sol";
 import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import {ITokenPoolFactory} from "src/interfaces/ITokenPoolFactory.sol";

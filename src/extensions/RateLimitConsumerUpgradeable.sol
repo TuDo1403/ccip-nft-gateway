@@ -43,6 +43,10 @@ abstract contract RateLimitConsumerUpgradeable is AccessControlEnumerableUpgrade
         _setRateLimitConfig(remoteChainSelector, outboundConfig, inboundConfig);
     }
 
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return interfaceId == type(IRateLimitConsumer).interfaceId || super.supportsInterface(interfaceId);
+    }
+
     /**
      * @notice Gets the token bucket with its values for the block it was requested at.
      * @return state The token bucket.

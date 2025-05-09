@@ -16,6 +16,10 @@ abstract contract MultiTokenPool is TokenPool, IMultiTokenPool {
 
     uint256[50] private __gap2;
 
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return interfaceId == type(IMultiTokenPool).interfaceId || super.supportsInterface(interfaceId);
+    }
+
     /// @notice Get all supported local localTokens that have a remote mapping for the given chain
     function getSupportedTokensForChain(uint64 remoteChainSelector)
         external
@@ -43,10 +47,24 @@ abstract contract MultiTokenPool is TokenPool, IMultiTokenPool {
     }
 
     function isSupportedToken(address localToken) public view virtual override returns (bool yes) {
-        return s_localTokens.contains(localToken);
+        // Short circuit if the token is not in the set
+        if (!s_localTokens.contains(localToken)) return false;
+
+        // Check if the token has a mapping on any enabled chain
+        uint64[] memory supportedChains = getSupportedChains();
+        uint256 chainCount = supportedChains.length;
+
+        for (uint256 i; i < chainCount; ++i) {
+            if (getRemoteToken(localToken, supportedChains[i]) != address(0)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     function getRemoteToken(address localToken, uint64 remoteChainSelector) public view returns (address remoteToken) {
+        if (!isSupportedChain(remoteChainSelector)) return address(0);
         return s_remoteTokens[localToken][remoteChainSelector];
     }
 
@@ -62,25 +80,8 @@ abstract contract MultiTokenPool is TokenPool, IMultiTokenPool {
     function _unmapRemoteToken(address localToken, uint64 remoteChainSelector) internal virtual override {
         delete s_remoteTokens[localToken][remoteChainSelector];
 
-        address[] memory localTokens = getTokens();
-        uint256 tokenCount = localTokens.length;
-
-        // Prune any localTokens that no longer have mappings on any enabled chain
-        uint64[] memory chains = getSupportedChains();
-        uint256 chainCount = chains.length;
-
-        for (uint256 i; i < tokenCount; ++i) {
-            bool hasMapping = false;
-            for (uint256 j; j < chainCount; ++j) {
-                if (s_remoteTokens[localTokens[i]][chains[j]] != address(0)) {
-                    hasMapping = true;
-                    break;
-                }
-            }
-            if (!hasMapping) {
-                s_localTokens.remove(localTokens[i]);
-            }
-        }
+        // If the token is not mapped to any other chain, remove it from the set
+        if (!isSupportedToken(localToken)) s_localTokens.remove(localToken);
     }
 
     function _requireLocalToken(address localToken) internal view virtual override {

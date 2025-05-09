@@ -49,10 +49,13 @@ abstract contract LockMintERC721Pool is
         public
         view
         virtual
-        override(AccessControlEnumerableUpgradeable, TokenPool)
+        override(PausableExtendedUpgradeable, RateLimitConsumerUpgradeable, SharedStorageConsumerUpgradeable, TokenPool)
         returns (bool)
     {
-        return interfaceId == type(ILockMintERC721Pool).interfaceId || super.supportsInterface(interfaceId);
+        return interfaceId == type(ILockMintERC721Pool).interfaceId || TokenPool.supportsInterface(interfaceId)
+            || SharedStorageConsumerUpgradeable.supportsInterface(interfaceId)
+            || RateLimitConsumerUpgradeable.supportsInterface(interfaceId)
+            || PausableExtendedUpgradeable.supportsInterface(interfaceId);
     }
 
     function _ccipReceive(Client.Any2EVMMessage calldata message) internal virtual override {
