@@ -9,12 +9,12 @@ import {ISharedStorageConsumer} from "src/interfaces/extensions/ISharedStorageCo
 abstract contract SharedStorageConsumerUpgradeable is AccessControlEnumerableUpgradeable, ISharedStorageConsumer {
     bytes32 public constant SHARED_STORAGE_SETTER_ROLE = keccak256("SHARED_STORAGE_SETTER_ROLE");
 
-    // Gap for future upgrades
+    /// @dev Gap for future upgrades
     uint256[50] private __gap1;
 
     mapping(address => bool) private s_sharedStorage;
 
-    // Gap for future upgrades
+    /// @dev Gap for future upgrades
     uint256[50] private __gap2;
 
     function __SharedStorageConsumer_init(address sharedStorageSetter) internal onlyInitializing {

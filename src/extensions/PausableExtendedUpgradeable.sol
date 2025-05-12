@@ -46,8 +46,24 @@ abstract contract PausableExtendedUpgradeable is
         return s_globalPauser;
     }
 
+    function setGlobalPauser(address globalPauser) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        s_globalPauser = globalPauser;
+
+        if (globalPauser == address(0)) {
+            _revokeRole(PAUSER_ROLE, s_globalPauser);
+            return;
+        }
+        
+        _grantRole(PAUSER_ROLE, globalPauser);
+    }
+
     function paused() public view virtual override returns (bool) {
-        return
-            (hasRole(PAUSER_ROLE, s_globalPauser) && IPausable(s_globalPauser).paused()) || PausableUpgradeable.paused();
+        address globalPauser = s_globalPauser;
+        return (hasRole(PAUSER_ROLE, globalPauser) && _hasCode(globalPauser) && IPausable(globalPauser).paused())
+            || PausableUpgradeable.paused();
+    }
+
+    function _hasCode(address target) private view returns (bool) {
+        return target.code.length > 0;
     }
 }

@@ -146,6 +146,8 @@ contract TokenPoolFactory_DualDeployTest is Test {
     ) external view {
         vm.assume(localCreator != address(0));
         vm.assume(remoteCreator != address(0));
+        vm.assume(tokenLocal != address(0));
+        vm.assume(tokenRemote != address(0));
 
         address a = localFactory.predictPool(
             blueprint, localCreator, localSeed ? currentChainSelector : remoteChainSelector, tokenLocal

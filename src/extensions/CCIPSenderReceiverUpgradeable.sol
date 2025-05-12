@@ -20,14 +20,21 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.UintSet;
 
+    /// @dev Gap for future storage
     uint256[50] private __gap1;
 
+    /// @dev Current chain selector
     uint64 private s_currentChainSelector;
+    /// @dev CCIP Risk Management Network Proxy
     IRMN private s_rmnProxy;
+    /// @dev CCIP Router
     IRouterClientExtended private s_router;
+    /// @dev Remote chain selectors set
     EnumerableSet.UintSet private s_remoteChainSelectors;
+    /// @dev Mapping of remote chain selector to enabled sender. This is the address that is allowed to send messages from the remote chain.
     mapping(uint64 remoteChainSelector => address) private s_remoteSenders;
 
+    /// @dev Gap for future storage
     uint256[50] private __gap2;
 
     modifier onlyEnabledChain(uint64 remoteChainSelector) {
@@ -65,7 +72,9 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         s_currentChainSelector = currentChainSelector;
     }
 
-    /// @inheritdoc IAny2EVMMessageReceiver
+    /**
+     * @inheritdoc IAny2EVMMessageReceiver
+     */
     function ccipReceive(Client.Any2EVMMessage calldata message)
         external
         override
@@ -81,6 +90,9 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         emit MessageReceived(sender, message.messageId);
     }
 
+    /**
+     * @inheritdoc ICCIPSenderReceiver
+     */
     function isFeeTokenSupported(uint64 remoteChainSelector, address feeToken) external view returns (bool yes) {
         address[] memory feeTokens = getFeeTokens(remoteChainSelector);
         uint256 feeTokenCount = feeTokens.length;
@@ -93,6 +105,9 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         return false;
     }
 
+    /**
+     * @inheritdoc ICCIPSenderReceiver
+     */
     function getFeeTokens(uint64 remoteChainSelector)
         public
         view
@@ -102,19 +117,31 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         return IEVM2EVMOnRamp(s_router.getOnRamp(remoteChainSelector)).getDynamicConfig().priceRegistry.getFeeTokens();
     }
 
+    /**
+     * @inheritdoc ICCIPSenderReceiver
+     */
     function isLocalChain(uint64 currentChainSelector) public view returns (bool yes) {
         return currentChainSelector == s_currentChainSelector;
     }
 
+    /**
+     * @inheritdoc ICCIPSenderReceiver
+     */
     function isSupportedChain(uint64 remoteChainSelector) public view returns (bool yes) {
         return s_remoteChainSelectors.contains(remoteChainSelector);
     }
 
+    /**
+     * @inheritdoc ICCIPSenderReceiver
+     */
     function isSenderEnabled(uint64 remoteChainSelector, address sender) public view returns (bool yes) {
         if (!isSupportedChain(remoteChainSelector)) return false;
         return s_remoteSenders[remoteChainSelector] == sender;
     }
 
+    /**
+     * @inheritdoc ICCIPSenderReceiver
+     */
     function getSupportedChains() public view returns (uint64[] memory remoteChainSelectors) {
         uint256[] memory values = s_remoteChainSelectors.values();
         assembly ("memory-safe") {
@@ -122,14 +149,23 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         }
     }
 
+    /**
+     * @inheritdoc ICCIPSenderReceiver
+     */
     function getCurrentChainSelector() public view returns (uint64 currentChainSelector) {
         return s_currentChainSelector;
     }
 
+    /**
+     * @inheritdoc ICCIPSenderReceiver
+     */
     function getRouter() public view returns (IRouterClientExtended router) {
         return s_router;
     }
 
+    /**
+     * @inheritdoc ICCIPSenderReceiver
+     */
     function getRmnProxy() external view returns (IRMN rmnProxy) {
         return s_rmnProxy;
     }
@@ -157,6 +193,11 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
      */
     function _ccipReceive(Client.Any2EVMMessage calldata message) internal virtual;
 
+    /**
+     * @dev Enable a remote chain
+     * @param remoteChainSelector The chain selector of the remote chain
+     * @param remoteSender The address of the sender on the remote chain
+     */
     function _addRemoteChain(uint64 remoteChainSelector, address remoteSender) internal {
         _requireNonZero(remoteSender);
 
@@ -169,6 +210,10 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         emit RemoteChainEnabled(msg.sender, remoteChainSelector, remoteSender);
     }
 
+    /**
+     * @dev Disable a remote chain
+     * @param remoteChainSelector The chain selector of the remote chain
+     */
     function _removeRemoteChain(uint64 remoteChainSelector) internal {
         if (!s_remoteChainSelectors.remove(remoteChainSelector)) revert NonExistentChain(remoteChainSelector);
         delete s_remoteSenders[remoteChainSelector];
@@ -176,6 +221,11 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         emit RemoteChainDisabled(msg.sender, remoteChainSelector);
     }
 
+    /**
+     * @notice Send data to a remote chain and pay fee by ERC20 token
+     * If the feeToken is address(0), the fee will be wrapped into WrappedNative token.
+     * Revert if the feeToken is not supported by the remote chain.
+     */
     function _sendDataPayFeeToken(
         uint64 remoteChainSelector,
         address receiver,
@@ -199,7 +249,7 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
             message.feeToken = feeToken;
             IWrappedNative(feeToken).deposit{value: fee}();
 
-            uint256 overspent = fee - msg.value;
+            uint256 overspent = msg.value - fee;
             if (overspent > 0) {
                 // solhint-disable-next-line avoid-low-level-calls
                 (bool success,) = msg.sender.call{value: overspent}("");
@@ -218,6 +268,9 @@ abstract contract CCIPSenderReceiverUpgradeable is Initializable, ICCIPSenderRec
         emit MessageSent(msg.sender, messageId);
     }
 
+    /**
+     * @notice Estimate the fee for sending data to a remote chain
+     */
     function _getSendDataFee(
         uint64 remoteChainSelector,
         address receiver,

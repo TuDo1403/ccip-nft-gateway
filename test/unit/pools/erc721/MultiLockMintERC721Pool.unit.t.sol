@@ -23,10 +23,19 @@ import {ILockMintERC721Pool} from "src/interfaces/pools/erc721/ILockMintERC721Po
 import {ERC165Checker} from "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import {IMultiLockMintERC721Pool} from "src/interfaces/pools/erc721/IMultiLockMintERC721Pool.sol";
 import {ISharedStorageConsumer} from "src/interfaces/extensions/ISharedStorageConsumer.sol";
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {MockERC20} from "forge-std/mocks/MockERC20.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {MockPauser} from "test/mocks/MockPauser.sol";
 
 contract MultiLockMintERC721Pool_UnitTest is Test {
     using Clones for address;
     using ERC165Checker for address;
+
+    error ReceiverError(bytes4 errSelector);
+
+    address public blueprint;
 
     MultiLockMintERC721Pool public pool;
     MockERC721Mintable public erc721;
@@ -46,7 +55,7 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
     function setUp() public {
         ccipSimulator = new CCIPLocalSimulator();
         beacon = new UpgradeableBeacon(address(new MultiLockMintERC721Pool()), beaconOwner);
-        address blueprint = address(new BeaconProxy(address(beacon), ""));
+        blueprint = address(new BeaconProxy(address(beacon), ""));
         pool = MultiLockMintERC721Pool(blueprint.clone());
 
         pool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), currentChainSelector);
@@ -59,26 +68,58 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
         assertTrue(pool.hasRole(pool.TOKEN_POOL_OWNER_ROLE(), admin));
 
         targetArtifact("MultiLockMintERC721Pool");
-        targetContract(address(pool));
+        // targetContract(address(pool));
     }
 
-    function invariant_getSupportedTokensForChain_IsSubsetOf_getTokens() external {
-        uint64[] memory supportedChains = pool.getSupportedChains();
-        address[] memory localTokens = pool.getTokens();
+    function crossTransfer(
+        address caller,
+        address localToken,
+        uint64 remoteChainSelector,
+        address to,
+        uint256 id,
+        address fee,
+        uint256 nativeValue,
+        bool reverted
+    ) public virtual {
+        if (!reverted) {
+            // vm.expectEmit(address(pool));
+            // emit ICCIPSenderReceiver.MessageSent(caller)
+        }
 
-        for (uint256 i; i < supportedChains.length; i++) {
-            address[] memory localTokens = pool.getSupportedTokensForChain(supportedChains[i]);
-            for (uint256 j; j < localTokens.length; j++) {
-                // assertTrue(pool.isSupportedToken(localTokens[j]), "Local token not found in the list");
-                bool found = false;
-                for (uint256 k; k < localTokens.length; k++) {
-                    if (localTokens[k] == localTokens[j]) {
-                        found = true;
-                        break;
-                    }
-                }
-                assertTrue(found, "Local token not found in the list");
-            }
+        vm.prank(caller);
+        pool.crossTransfer{value: nativeValue}(localToken, remoteChainSelector, to, id, fee);
+
+        if (reverted) return;
+
+        assertEq(IERC721(localToken).ownerOf(id), address(pool));
+        address remoteToken = pool.getRemoteToken(localToken, remoteChainSelector);
+        assertEq(IERC721(remoteToken).ownerOf(id), to);
+    }
+
+    function crossBatchTransfer(
+        address caller,
+        address localToken,
+        uint64 remoteChainSelector,
+        address to,
+        uint256[] memory ids,
+        address fee,
+        uint256 nativeValue,
+        bool reverted
+    ) public virtual {
+        if (!reverted) {
+            // vm.expectEmit(address(pool));
+            // emit ICCIPSenderReceiver.MessageSent(caller)
+        }
+
+        vm.prank(caller);
+        pool.crossBatchTransfer{value: nativeValue}(localToken, remoteChainSelector, to, ids, fee);
+
+        if (reverted) return;
+
+        for (uint256 i = 0; i < ids.length; i++) {
+            assertEq(IERC721(localToken).ownerOf(ids[i]), address(pool));
+            address remoteToken = pool.getRemoteToken(localToken, remoteChainSelector);
+            assertEq(IERC721(remoteToken).ownerOf(ids[i]), to);
         }
     }
 
@@ -97,9 +138,8 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
         if (reverted) return;
 
         assertEq(pool.getRemoteToken(localToken, remoteChainSelector), address(0));
-        assertFalse(pool.isSupportedToken(localToken));
 
-        address[] memory localTokens = pool.getSupportedTokensForChain(remoteChainSelector);
+        (address[] memory localTokens,) = pool.getSupportedTokensForChain(remoteChainSelector);
         bool found = false;
         for (uint256 i = 0; i < localTokens.length; i++) {
             if (localTokens[i] == localToken) {
@@ -144,7 +184,7 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
         assertEq(pool.getRemoteToken(localToken, remoteChainSelector), remoteToken);
         assertTrue(pool.isSupportedToken(localToken));
 
-        address[] memory localTokens = pool.getSupportedTokensForChain(remoteChainSelector);
+        (address[] memory localTokens,) = pool.getSupportedTokensForChain(remoteChainSelector);
         bool found = false;
         for (uint256 i = 0; i < localTokens.length; i++) {
             if (localTokens[i] == localToken) {
@@ -268,6 +308,86 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
         assertTrue(address(pool).supportsInterface(type(IAccessControl).interfaceId), "IAccessControl not supported");
     }
 
+    function testConcrete_RevertIf_Unauthorized_withdrawLiquidity() external {
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        address remoteToken = makeAddr("remoteToken");
+        address to = makeAddr("to");
+        uint64 remoteChainSelector = 2;
+
+        ccipSimulator.supportChain(remoteChainSelector);
+
+        vm.startPrank(admin);
+        pool.addRemotePool(remoteChainSelector, makeAddr("remotePool"));
+        pool.mapRemoteToken(address(localToken), remoteChainSelector, remoteToken);
+        vm.stopPrank();
+
+        localToken.mint(address(pool), 1);
+        localToken.mint(address(pool), 2);
+        localToken.mint(address(pool), 3);
+
+        address[] memory localTokens = new address[](3);
+        localTokens[0] = address(localToken);
+        localTokens[1] = address(localToken);
+        localTokens[2] = address(localToken);
+
+        uint256[] memory ids = new uint256[](3);
+        ids[0] = 1;
+        ids[1] = 2;
+        ids[2] = 3;
+
+        address[] memory tos = new address[](3);
+        tos[0] = to;
+        tos[1] = to;
+        tos[2] = to;
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, address(this), pool.DEFAULT_ADMIN_ROLE()
+            )
+        );
+        pool.withdrawLiquidity(localTokens, tos, ids);
+    }
+
+    function testConcrete_Admin_withdrawalLiquidity() external {
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        address remoteToken = makeAddr("remoteToken");
+        address to = makeAddr("to");
+        uint64 remoteChainSelector = 2;
+
+        ccipSimulator.supportChain(remoteChainSelector);
+
+        vm.startPrank(admin);
+        pool.addRemotePool(remoteChainSelector, makeAddr("remotePool"));
+        pool.mapRemoteToken(address(localToken), remoteChainSelector, remoteToken);
+        vm.stopPrank();
+
+        localToken.mint(address(pool), 1);
+        localToken.mint(address(pool), 2);
+        localToken.mint(address(pool), 3);
+
+        address[] memory localTokens = new address[](3);
+        localTokens[0] = address(localToken);
+        localTokens[1] = address(localToken);
+        localTokens[2] = address(localToken);
+
+        uint256[] memory ids = new uint256[](3);
+        ids[0] = 1;
+        ids[1] = 2;
+        ids[2] = 3;
+
+        address[] memory tos = new address[](3);
+        tos[0] = to;
+        tos[1] = to;
+        tos[2] = to;
+
+        vm.prank(admin);
+        pool.withdrawLiquidity(localTokens, tos, ids);
+
+        assertEq(localToken.ownerOf(1), to);
+        assertEq(localToken.ownerOf(2), to);
+        assertEq(localToken.ownerOf(3), to);
+    }
+
     function testFuzz_removeRemotePool(uint64 remoteChainSelector, address remotePool) public {
         vm.assume(remoteChainSelector != currentChainSelector);
         vm.assume(remotePool != address(0));
@@ -297,7 +417,555 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
         mapRemoteToken(admin, localToken, remoteChainSelector, remoteToken, false);
     }
 
-    function testConcrete_ReturnZero_When_ChainDisabled_getRemoteToken() external {
+    function testFuzz_crossTransfer(
+        address caller,
+        uint64 remoteChainSelector,
+        address to,
+        uint256 id,
+        bool nativeFeeOrERC20
+    ) public {
+        vm.assume(caller != address(0));
+        vm.assume(remoteChainSelector != 0);
+        vm.assume(remoteChainSelector != currentChainSelector);
+        vm.assume(to != address(0));
+
+        ccipSimulator.supportChain(currentChainSelector);
+        ccipSimulator.supportChain(remoteChainSelector);
+
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+
+        address feeToken = nativeFeeOrERC20 ? address(0) : address(new MockERC20());
+        uint256 fee = pool.estimateFee(feeToken, remoteChainSelector, 1);
+        uint256 nativeValue = feeToken == address(0) ? fee : 0;
+        if (feeToken == address(0)) {
+            deal(caller, fee);
+        } else {
+            deal(feeToken, caller, fee);
+            vm.prank(caller);
+            IERC20(feeToken).approve(address(pool), fee);
+        }
+
+        localToken.mint(caller, id);
+        vm.startPrank(caller);
+        localToken.approve(address(pool), id);
+        vm.stopPrank();
+
+        ccipSimulator.switchChain(currentChainSelector);
+        crossTransfer(caller, address(localToken), remoteChainSelector, to, id, feeToken, nativeValue, false);
+    }
+
+    function testFuzz_crossBatchTransfer(
+        address caller,
+        uint64 remoteChainSelector,
+        address to,
+        uint256[] memory ids,
+        bool nativeFeeOrERC20
+    ) public {
+        vm.assume(!containsDuplicate(ids));
+        vm.assume(caller != address(0));
+        vm.assume(remoteChainSelector != 0);
+        vm.assume(remoteChainSelector != currentChainSelector);
+        vm.assume(to != address(0));
+        vm.assume(ids.length > 0);
+
+        ccipSimulator.supportChain(currentChainSelector);
+        ccipSimulator.supportChain(remoteChainSelector);
+
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+
+        address feeToken = nativeFeeOrERC20 ? address(0) : address(new MockERC20());
+        uint256 fee = pool.estimateFee(feeToken, remoteChainSelector, ids.length);
+        uint256 nativeValue = feeToken == address(0) ? fee : 0;
+        if (feeToken == address(0)) {
+            deal(caller, fee);
+        } else {
+            deal(feeToken, caller, fee);
+            vm.prank(caller);
+            IERC20(feeToken).approve(address(pool), fee);
+        }
+
+        for (uint256 i = 0; i < ids.length; i++) {
+            localToken.mint(caller, ids[i]);
+        }
+
+        vm.startPrank(caller);
+        localToken.setApprovalForAll(address(pool), true);
+        vm.stopPrank();
+
+        ccipSimulator.switchChain(currentChainSelector);
+        crossBatchTransfer(caller, address(localToken), remoteChainSelector, to, ids, feeToken, nativeValue, false);
+    }
+
+    function testConcrete_CanRelease_WhenContainsId_crossTransfer() external {
+        address caller = makeAddr("caller");
+        address feeToken = address(0);
+        uint64 remoteChainSelector = 2;
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        ccipSimulator.supportChain(currentChainSelector);
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+
+        uint256 fee = 10 ether;
+        deal(caller, fee);
+
+        localToken.mint(caller, 1);
+        remoteToken.mint(address(remotePool), 1);
+
+        vm.prank(caller);
+        localToken.approve(address(pool), 1);
+
+        ccipSimulator.switchChain(currentChainSelector);
+        crossTransfer(caller, address(localToken), remoteChainSelector, makeAddr("to"), 1, feeToken, fee, false);
+    }
+
+    function testConcrete_CanUseExternalStorage_WhenExternalStorageApproved_ToTransfer_crossTransfer() external {
+        address caller = makeAddr("caller");
+        address feeToken = address(0);
+        uint64 remoteChainSelector = 2;
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        ccipSimulator.supportChain(currentChainSelector);
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+
+        uint256 fee = 10 ether;
+        deal(caller, fee);
+
+        address sharedStorage = makeAddr("sharedStorage");
+        remoteToken.mint(sharedStorage, 1);
+        vm.prank(sharedStorage);
+        remoteToken.setApprovalForAll(address(remotePool), true);
+        vm.prank(admin);
+        remotePool.setSharedStorage(sharedStorage, true);
+
+        localToken.mint(caller, 1);
+
+        vm.prank(caller);
+        localToken.approve(address(pool), 1);
+
+        ccipSimulator.switchChain(currentChainSelector);
+        crossTransfer(caller, address(localToken), remoteChainSelector, makeAddr("to"), 1, feeToken, fee, false);
+    }
+
+    function testConcrete_RevertIf_FeeIsERC20_SendNativeValue_crossTransfer() external {
+        address caller = makeAddr("caller");
+        address feeToken = address(new MockERC20());
+        uint64 remoteChainSelector = 2;
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        ccipSimulator.supportChain(currentChainSelector);
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+
+        uint256 fee = 10 ether;
+        deal(caller, fee);
+
+        localToken.mint(caller, 1);
+        vm.prank(caller);
+        localToken.approve(address(pool), 1);
+
+        ccipSimulator.switchChain(currentChainSelector);
+        vm.expectRevert(abi.encodeWithSelector(ICCIPSenderReceiver.MsgValueNotAllowed.selector, fee));
+        crossTransfer(caller, address(localToken), remoteChainSelector, makeAddr("to"), 1, feeToken, fee, true);
+    }
+
+    function testConcrete_RefundIf_SendMoreNativeFee_crossTransfer() external {
+        address caller = makeAddr("caller");
+        address feeToken = address(0);
+        uint64 remoteChainSelector = 2;
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        ccipSimulator.supportChain(currentChainSelector);
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+
+        uint256 fee = 10 ether;
+        deal(caller, fee + 1 ether);
+
+        localToken.mint(caller, 1);
+        vm.prank(caller);
+        localToken.approve(address(pool), 1);
+
+        ccipSimulator.switchChain(currentChainSelector);
+        crossTransfer(
+            caller, address(localToken), remoteChainSelector, makeAddr("to"), 1, feeToken, fee + 1 ether, false
+        );
+
+        assertEq(caller.balance, 1 ether);
+    }
+
+    function testConcrete_RevertIf_ExternalStorageNotApproved_ToTransfer_crossTransfer() external {
+        address caller = makeAddr("caller");
+        address feeToken = address(0);
+        uint64 remoteChainSelector = 2;
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        ccipSimulator.supportChain(currentChainSelector);
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+
+        uint256 fee = 10 ether;
+        deal(caller, fee);
+
+        address sharedStorage = makeAddr("sharedStorage");
+        remoteToken.mint(sharedStorage, 1);
+        vm.prank(admin);
+        remotePool.setSharedStorage(sharedStorage, true);
+
+        localToken.mint(caller, 1);
+
+        vm.prank(caller);
+        localToken.approve(address(pool), 1);
+
+        ccipSimulator.switchChain(currentChainSelector);
+        vm.expectRevert();
+        crossTransfer(caller, address(localToken), remoteChainSelector, makeAddr("to"), 1, feeToken, fee, true);
+    }
+
+    function testConcrete_RevertIf_PoolIsPaused_ByPauser_crossTransfer() external {
+        address caller = makeAddr("caller");
+        address feeToken = address(0);
+        uint64 remoteChainSelector = 2;
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        ccipSimulator.supportChain(currentChainSelector);
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+
+        uint256 fee = 10 ether;
+        deal(caller, fee);
+
+        localToken.mint(caller, 1);
+        vm.prank(caller);
+        localToken.approve(address(pool), 1);
+
+        vm.prank(admin);
+        pool.pause();
+
+        vm.expectRevert(abi.encodeWithSelector(Pausable.EnforcedPause.selector));
+        crossTransfer(caller, address(localToken), remoteChainSelector, makeAddr("to"), 1, feeToken, fee, true);
+    }
+
+    function testConcrete_RevertIf_RemotePoolIsPaused_ByPauser_crossTransfer() external {
+        address caller = makeAddr("caller");
+        address feeToken = address(0);
+        uint64 remoteChainSelector = 2;
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        ccipSimulator.supportChain(currentChainSelector);
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+
+        uint256 fee = 10 ether;
+        deal(caller, fee);
+
+        localToken.mint(caller, 1);
+        vm.prank(caller);
+        localToken.approve(address(pool), 1);
+
+        vm.prank(admin);
+        remotePool.pause();
+
+        ccipSimulator.switchChain(currentChainSelector);
+        vm.expectRevert();
+        crossTransfer(caller, address(localToken), remoteChainSelector, makeAddr("to"), 1, feeToken, fee, true);
+    }
+
+    function testConcrete_RevertIf_PoolIsPaused_ByGlobalPauser_crossTransfer() external {
+        address caller = makeAddr("caller");
+        address feeToken = address(0);
+        uint64 remoteChainSelector = 2;
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        ccipSimulator.supportChain(currentChainSelector);
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+
+        uint256 fee = 10 ether;
+        deal(caller, fee);
+
+        localToken.mint(caller, 1);
+        vm.prank(caller);
+        localToken.approve(address(pool), 1);
+
+        address emergencyPauser = makeAddr("emergencyPauser");
+        MockPauser pauser = new MockPauser(emergencyPauser);
+        vm.prank(admin);
+        pool.setGlobalPauser(address(pauser));
+        vm.prank(emergencyPauser);
+        pauser.pause();
+
+        vm.expectRevert(abi.encodeWithSelector(Pausable.EnforcedPause.selector));
+        crossTransfer(caller, address(localToken), remoteChainSelector, makeAddr("to"), 1, feeToken, fee, true);
+    }
+
+    function testConcrete_RevertIf_TokenUnmappedOnCurrentChain_crossTransfer() external {
+        address caller = makeAddr("caller");
+        address feeToken = address(0);
+        uint64 remoteChainSelector = 2;
+        uint64 otherRemoteChainSelector = 3;
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        ccipSimulator.supportChain(currentChainSelector);
+        ccipSimulator.supportChain(otherRemoteChainSelector);
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        addRemotePool(admin, otherRemoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+        mapRemoteToken(admin, makeAddr("otherLocalToken"), remoteChainSelector, makeAddr("otherRemoteToken"), false);
+        mapRemoteToken(admin, address(localToken), otherRemoteChainSelector, address(remoteToken), false);
+        unmapRemoteToken(admin, address(localToken), remoteChainSelector, false);
+
+        uint256 fee = 10 ether;
+        deal(caller, fee);
+
+        localToken.mint(caller, 1);
+        vm.prank(caller);
+        localToken.approve(address(pool), 1);
+
+        vm.expectRevert(abi.encodeWithSelector(ICCIPSenderReceiver.ZeroAddressNotAllowed.selector));
+        crossTransfer(caller, address(localToken), remoteChainSelector, makeAddr("to"), 1, feeToken, fee, true);
+    }
+
+    function testConcrete_RevertIf_TokenUnmappedOnRemoteChain_crossTransfer() external {
+        address caller = makeAddr("caller");
+        address feeToken = address(0);
+        uint64 remoteChainSelector = 2;
+        uint64 otherRemoteChainSelector = 3;
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        ccipSimulator.supportChain(currentChainSelector);
+        ccipSimulator.supportChain(otherRemoteChainSelector);
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        addRemotePool(admin, otherRemoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+        mapRemoteToken(admin, address(localToken), otherRemoteChainSelector, address(remoteToken), false);
+        assertEq(pool.getRemoteToken(address(localToken), remoteChainSelector), address(remoteToken));
+
+        // Unmap token on remote chain
+        vm.startPrank(admin);
+        // Map other data to keep local tokens storage not wiped fully
+        remotePool.addRemotePool(otherRemoteChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), otherRemoteChainSelector, address(localToken));
+
+        remotePool.unmapRemoteToken(address(remoteToken), currentChainSelector);
+        vm.stopPrank();
+
+        assertEq(remotePool.getRemoteToken(address(remoteToken), currentChainSelector), address(0));
+
+        uint256 fee = 10 ether;
+        deal(caller, fee);
+
+        localToken.mint(caller, 1);
+        vm.prank(caller);
+        localToken.approve(address(pool), 1);
+
+        ccipSimulator.switchChain(currentChainSelector);
+        vm.expectRevert();
+        crossTransfer(caller, address(localToken), remoteChainSelector, makeAddr("to"), 1, feeToken, fee, true);
+    }
+
+    function testConcrete_RevertIf_ChainNotEnabledOnCurrentChain_crossTransfer() external {
+        address caller = makeAddr("caller");
+        address feeToken = address(0);
+        uint64 remoteChainSelector = 2;
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        ccipSimulator.supportChain(currentChainSelector);
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+
+        // disable chain
+        removeRemotePool(admin, remoteChainSelector, address(remotePool), false);
+
+        uint256 fee = 10 ether;
+        deal(caller, fee);
+
+        localToken.mint(caller, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(IMultiTokenPool.OnlyLocalToken.selector));
+        crossTransfer(caller, address(localToken), remoteChainSelector, makeAddr("to"), 1, feeToken, fee, true);
+    }
+
+    function testConcrete_RevertIf_ChainNotEnabledOnRemoteChain_crossTransfer() external {
+        address caller = makeAddr("caller");
+        address feeToken = address(0);
+        uint64 remoteChainSelector = 2;
+        MockERC721Mintable localToken = new MockERC721Mintable("MockLocal", "MCKL");
+        MockERC721Mintable remoteToken = new MockERC721Mintable("MockRemote", "MCKR");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        ccipSimulator.supportChain(currentChainSelector);
+
+        MultiLockMintERC721Pool remotePool = MultiLockMintERC721Pool(blueprint.clone());
+        vm.label(address(remotePool), "remotePool");
+        remotePool.initialize(admin, initFixedGas, initDynamicGas, address(ccipSimulator.router()), remoteChainSelector);
+        vm.startPrank(admin);
+        remotePool.addRemotePool(currentChainSelector, address(pool));
+        remotePool.mapRemoteToken(address(remoteToken), currentChainSelector, address(localToken));
+        vm.stopPrank();
+
+        addRemotePool(admin, remoteChainSelector, address(remotePool), false);
+        mapRemoteToken(admin, address(localToken), remoteChainSelector, address(remoteToken), false);
+
+        // disable chain on remote pool
+        vm.prank(admin);
+        remotePool.removeRemotePool(currentChainSelector);
+
+        uint256 fee = 10 ether;
+        deal(caller, fee);
+
+        localToken.mint(caller, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(ICCIPSenderReceiver.NonExistentChain.selector, currentChainSelector));
+        crossTransfer(caller, address(localToken), currentChainSelector, makeAddr("to"), 1, feeToken, fee, true);
+    }
+
+    function testConcrete_ReturnZero_WhenChainDisabled_getRemoteToken() external {
         uint64 remoteChainSelector = 2;
         address localToken = makeAddr("localToken");
         address remoteToken = makeAddr("remoteToken");
@@ -309,6 +977,21 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
         removeRemotePool(admin, remoteChainSelector, makeAddr("remotePool"), false);
 
         assertEq(pool.getRemoteToken(localToken, remoteChainSelector), address(0));
+    }
+
+    function testConcrete_ReturnZero_WhenChainDisabled_getSupportedTokensForChain() external {
+        uint64 remoteChainSelector = 2;
+        address localToken = makeAddr("localToken");
+        address remoteToken = makeAddr("remoteToken");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        addRemotePool(admin, remoteChainSelector, makeAddr("remotePool"), false);
+        mapRemoteToken(admin, localToken, remoteChainSelector, remoteToken, false);
+
+        removeRemotePool(admin, remoteChainSelector, makeAddr("remotePool"), false);
+
+        (address[] memory localTokens,) = pool.getSupportedTokensForChain(remoteChainSelector);
+        assertEq(localTokens.length, 0);
     }
 
     function testConcrete_AllTokensMappedToRemoteChain_IsNotSupported_WhenChainDisabled_isSupportedToken() external {
@@ -373,6 +1056,56 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
         assertFalse(found, "Local token should not be supported");
     }
 
+    function testConcrete_TokensStillInSet_WhenDisabledSomeMappedChain_getTokens() external {
+        uint64 remoteChainSelector1 = 2;
+        uint64 remoteChainSelector2 = 3;
+        uint64 remoteChainSelector3 = 4;
+        ccipSimulator.supportChain(remoteChainSelector1);
+        ccipSimulator.supportChain(remoteChainSelector2);
+        ccipSimulator.supportChain(remoteChainSelector3);
+
+        address remotePool1 = makeAddr("remotePool1");
+        addRemotePool(admin, remoteChainSelector1, remotePool1, false);
+        address remotePool2 = makeAddr("remotePool2");
+        addRemotePool(admin, remoteChainSelector2, remotePool2, false);
+        address remotePool3 = makeAddr("remotePool3");
+        addRemotePool(admin, remoteChainSelector3, remotePool3, false);
+
+        address localToken = makeAddr("localToken");
+        address remoteToken1 = makeAddr("remoteToken1");
+        mapRemoteToken(admin, localToken, remoteChainSelector1, remoteToken1, false);
+        address remoteToken2 = makeAddr("remoteToken2");
+        mapRemoteToken(admin, localToken, remoteChainSelector2, remoteToken2, false);
+        address remoteToken3 = makeAddr("remoteToken3");
+        mapRemoteToken(admin, localToken, remoteChainSelector3, remoteToken3, false);
+
+        removeRemotePool(admin, remoteChainSelector1, remotePool1, false);
+        removeRemotePool(admin, remoteChainSelector2, remotePool2, false);
+
+        address[] memory localTokens = pool.getTokens();
+        bool found = false;
+        for (uint256 i = 0; i < localTokens.length; i++) {
+            if (localTokens[i] == localToken) {
+                found = true;
+                break;
+            }
+        }
+        assertTrue(found, "Local token should be supported");
+    }
+
+    function testConcrete_RevertIf_UnmapUnexistingToken_unmapRemoteToken() external {
+        uint64 remoteChainSelector = 2;
+        address localToken = makeAddr("localToken");
+
+        ccipSimulator.supportChain(remoteChainSelector);
+        addRemotePool(admin, remoteChainSelector, makeAddr("remotePool"), false);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IMultiTokenPool.TokenNotMapped.selector, localToken, remoteChainSelector)
+        );
+        unmapRemoteToken(admin, localToken, remoteChainSelector, true);
+    }
+
     function testConcrete_CanMapManyTokens_WithSameRemoteChainSelector_mapRemoteToken() external {
         uint64 remoteChainSelector = 2;
         ccipSimulator.supportChain(remoteChainSelector);
@@ -408,6 +1141,24 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
         address localToken2 = makeAddr("localToken");
         address remoteToken2 = makeAddr("remoteToken2");
         mapRemoteToken(admin, localToken2, remoteChainSelector2, remoteToken2, false);
+    }
+
+    function testConcrete_RevertIf_MapTheSameRemoteToken_ToMany_LocalTokens_InSameRemoteChainSelector_mapRemoteToken()
+        external
+    {
+        uint64 remoteChainSelector = 2;
+        ccipSimulator.supportChain(remoteChainSelector);
+
+        address remotePool = makeAddr("remotePool");
+        addRemotePool(admin, remoteChainSelector, remotePool, false);
+
+        address localToken = makeAddr("localToken");
+        address remoteToken = makeAddr("remoteToken");
+        mapRemoteToken(admin, localToken, remoteChainSelector, remoteToken, false);
+
+        address localToken2 = makeAddr("localToken2");
+        vm.expectRevert(abi.encodeWithSelector(IMultiTokenPool.TokenAlreadyMapped.selector, localToken, remoteToken));
+        mapRemoteToken(admin, localToken2, remoteChainSelector, remoteToken, true);
     }
 
     function testConcrete_RevertIf_RemotePoolNotAdded_mapRemoteToken() external {
@@ -551,5 +1302,17 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(ICCIPSenderReceiver.ChainNotSupported.selector, remoteChainSelector));
         addRemotePool(admin, remoteChainSelector, remotePool, true);
+    }
+
+    function containsDuplicate(uint256[] memory array) internal pure returns (bool) {
+        uint256 length = array.length;
+        for (uint256 i = 0; i < length; i++) {
+            for (uint256 j = i + 1; j < length; j++) {
+                if (array[i] == array[j]) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

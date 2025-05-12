@@ -6,6 +6,8 @@ interface IPausableExtended {
 
     function getGlobalPauser() external view returns (address globalPauser);
 
+    function setGlobalPauser(address globalPauser) external;
+
     function pause() external;
 
     function unpause() external;

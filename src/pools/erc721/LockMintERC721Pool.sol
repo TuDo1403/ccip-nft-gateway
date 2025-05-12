@@ -60,6 +60,18 @@ abstract contract LockMintERC721Pool is
 
     function _ccipReceive(Client.Any2EVMMessage calldata message) internal virtual override {
         Pool.ReleaseOrMint memory releaseOrMint = abi.decode(message.data, (Pool.ReleaseOrMint));
+
+        // Validate the message.sourceChainSelector against the releaseOrMint.remoteChainSelector
+        if (message.sourceChainSelector != releaseOrMint.remoteChainSelector) {
+            revert RemoteChainSelectorNotMatch(message.sourceChainSelector, releaseOrMint.remoteChainSelector);
+        }
+        // Validate the message.sender against the releaseOrMint.remotePoolAddress
+        address remoteSender = abi.decode(message.sender, (address));
+        if (remoteSender != releaseOrMint.remotePoolAddress) {
+            revert RemotePoolNotMatch(remoteSender, releaseOrMint.remotePoolAddress);
+        }
+        _requireNonZero(releaseOrMint.originalSender);
+
         _releaseOrMint(releaseOrMint);
 
         emit CrossTransfer(

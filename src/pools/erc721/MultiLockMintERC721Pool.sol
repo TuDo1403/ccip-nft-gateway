@@ -28,15 +28,20 @@ contract MultiLockMintERC721Pool is MultiTokenPool, LockMintERC721Pool, IMultiLo
         __TokenPool_init(admin, fixedGas, dynamicGas, router, currentChainSelector);
     }
 
-    function withdrawLiquidity(address localToken, address to, uint256[] calldata ids)
+    function withdrawLiquidity(address[] calldata localTokens, address[] calldata tos, uint256[] calldata ids)
         external
         onlyRole(DEFAULT_ADMIN_ROLE)
-        nonZero(to)
-        onlyLocalToken(localToken)
     {
+        _requireEqualLength(localTokens.length, ids.length);
+        _requireEqualLength(localTokens.length, tos.length);
         uint256 tokenCount = ids.length;
+        _requireNonZero(tokenCount);
+
         for (uint256 i; i < tokenCount; ++i) {
-            IERC721(localToken).transferFrom(address(this), to, ids[i]);
+            _requireLocalToken(localTokens[i]);
+            _requireNonZero(tos[i]);
+
+            IERC721(localTokens[i]).transferFrom(address(this), tos[i], ids[i]);
         }
     }
 
@@ -69,6 +74,17 @@ contract MultiLockMintERC721Pool is MultiTokenPool, LockMintERC721Pool, IMultiLo
             || LockMintERC721Pool.supportsInterface(interfaceId) || MultiTokenPool.supportsInterface(interfaceId);
     }
 
+    function _releaseOrMint(Pool.ReleaseOrMint memory releaseOrMint)
+        internal
+        virtual
+        override(TokenPool, LockMintERC721Pool)
+    {
+        // Prevent the case when localToken is mapped to many remote chains
+        // and the message is sent to from the remote chain that is unmapped with the localToken
+        _requireNonZero(getRemoteToken(releaseOrMint.localToken, releaseOrMint.remoteChainSelector));
+        super._releaseOrMint(releaseOrMint);
+    }
+
     function _crossBatchTransfer(
         address localToken,
         uint64 remoteChainSelector,
@@ -92,7 +108,7 @@ contract MultiLockMintERC721Pool is MultiTokenPool, LockMintERC721Pool, IMultiLo
                     remoteChainSelector: getCurrentChainSelector(),
                     receiver: to,
                     localToken: remoteToken,
-                    remotePoolAddress: (address(this)),
+                    remotePoolAddress: address(this),
                     remotePoolData: data
                 })
             ),

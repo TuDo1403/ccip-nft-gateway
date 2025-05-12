@@ -14,11 +14,15 @@ import {Pool} from "src/libraries/Pool.sol";
 abstract contract TokenPool is AccessControlEnumerableUpgradeable, CCIPSenderReceiverUpgradeable, ITokenPool {
     bytes32 public constant TOKEN_POOL_OWNER_ROLE = keccak256("TOKEN_POOL_OWNER_ROLE");
 
+    /// @dev Gap for future upgrades
     uint256[50] private __gap1;
 
+    /// @dev Fixed gas for cross-chain message.
     uint32 private s_fixedGas;
+    /// @dev Dynamic gas for cross-chain message. Multiplied by the number of tokens.
     uint32 private s_dynamicGas;
 
+    /// @dev Gap for future upgrades
     uint256[50] private __gap2;
 
     modifier onlyLocalToken(address localToken) {
@@ -42,16 +46,25 @@ abstract contract TokenPool is AccessControlEnumerableUpgradeable, CCIPSenderRec
         _setGasLimitConfig(fixedGas, dynamicGas);
     }
 
+    /**
+     * @inheritdoc ITokenPool
+     */
     function addRemotePool(uint64 remoteChainSelector, address remotePool) external onlyRole(TOKEN_POOL_OWNER_ROLE) {
         _addRemoteChain(remoteChainSelector, remotePool);
         emit RemotePoolAdded(msg.sender, remoteChainSelector, remotePool);
     }
 
+    /**
+     * @inheritdoc ITokenPool
+     */
     function removeRemotePool(uint64 remoteChainSelector) external onlyRole(TOKEN_POOL_OWNER_ROLE) {
         _removeRemoteChain(remoteChainSelector);
         emit RemotePoolRemoved(msg.sender, remoteChainSelector);
     }
 
+    /**
+     * @inheritdoc ITokenPool
+     */
     function mapRemoteToken(address localToken, uint64 remoteChainSelector, address remoteToken)
         external
         onlyRole(TOKEN_POOL_OWNER_ROLE)
@@ -63,6 +76,9 @@ abstract contract TokenPool is AccessControlEnumerableUpgradeable, CCIPSenderRec
         emit RemoteTokenMapped(msg.sender, remoteChainSelector, localToken, remoteToken);
     }
 
+    /**
+     * @inheritdoc ITokenPool
+     */
     function unmapRemoteToken(address localToken, uint64 remoteChainSelector)
         external
         onlyRole(TOKEN_POOL_OWNER_ROLE)
@@ -72,14 +88,23 @@ abstract contract TokenPool is AccessControlEnumerableUpgradeable, CCIPSenderRec
         emit RemoteTokenUnmapped(msg.sender, remoteChainSelector, localToken);
     }
 
+    /**
+     * @inheritdoc ITokenPool
+     */
     function setGasLimitConfig(uint32 fixedGas, uint32 dynamicGas) external onlyRole(TOKEN_POOL_OWNER_ROLE) {
         _setGasLimitConfig(fixedGas, dynamicGas);
     }
 
+    /**
+     * @inheritdoc ITokenPool
+     */
     function getRemotePool(uint64 remoteChainSelector) public view returns (address remotePool) {
         return _getRemoteSender(remoteChainSelector);
     }
 
+    /**
+     * @inheritdoc ITokenPool
+     */
     function getRemotePools()
         external
         view
@@ -94,6 +119,9 @@ abstract contract TokenPool is AccessControlEnumerableUpgradeable, CCIPSenderRec
         }
     }
 
+    /**
+     * @inheritdoc ITokenPool
+     */
     function getGasLimitConfig() public view returns (uint32 fixedGas, uint32 dynamicGas) {
         return (s_fixedGas, s_dynamicGas);
     }
@@ -109,14 +137,37 @@ abstract contract TokenPool is AccessControlEnumerableUpgradeable, CCIPSenderRec
             || super.supportsInterface(interfaceId);
     }
 
+    /**
+     * @dev Virtual function to be implemented by derived contracts to handle the lock or burn operation.
+     */
     function _lockOrBurn(Pool.LockOrBurn memory lockOrBurn) internal virtual;
 
+    /**
+     * @dev Virtual function to be implemented by derived contracts to handle the release or mint operation.
+     */
     function _releaseOrMint(Pool.ReleaseOrMint memory releaseOrMint) internal virtual;
 
+    /**
+     * @dev Virtual function to be implemented by derived contracts to handle the mapping of remote tokens.
+     */
     function _mapRemoteToken(address localToken, uint64 remoteChainSelector, address remoteToken) internal virtual;
 
+    /**
+     * @dev Virtual function to be implemented by derived contracts to handle the unmapping of remote tokens.
+     */
     function _unmapRemoteToken(address localToken, uint64 remoteChainSelector) internal virtual;
 
+    /**
+     * @dev Internal function to require that the local token is supported by the pool.
+     */
+    function _requireLocalToken(address localToken) internal view virtual;
+
+    /**
+     * @dev Internal function to set the gas limit configuration.
+     * Requires that both fixedGas and dynamicGas are non-zero.
+     * @param fixedGas The fixed gas limit.
+     * @param dynamicGas The dynamic gas limit.
+     */
     function _setGasLimitConfig(uint32 fixedGas, uint32 dynamicGas) internal {
         _requireNonZero(fixedGas);
         _requireNonZero(dynamicGas);
@@ -126,6 +177,4 @@ abstract contract TokenPool is AccessControlEnumerableUpgradeable, CCIPSenderRec
 
         emit GasLimitConfigured(msg.sender, fixedGas, dynamicGas);
     }
-
-    function _requireLocalToken(address localToken) internal view virtual;
 }
