@@ -43,7 +43,20 @@ abstract contract MultiTokenPool is TokenPool, IMultiTokenPool {
     }
 
     function getTokens() public view returns (address[] memory localTokens) {
-        return s_localTokens.values();
+        address[] memory tokenSet = s_localTokens.values();
+        uint256 tokenCount = tokenSet.length;
+
+        localTokens = new address[](tokenCount);
+        uint256 count;
+        for (uint256 i; i < tokenCount; ++i) {
+            if (isSupportedToken(tokenSet[i])) {
+                localTokens[count++] = tokenSet[i];
+            }
+        }
+
+        assembly ("memory-safe") {
+            mstore(localTokens, count)
+        }
     }
 
     function isSupportedToken(address localToken) public view virtual override returns (bool yes) {

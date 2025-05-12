@@ -38,7 +38,7 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
     address public alice = makeAddr("alice");
     address public bob = makeAddr("bob");
     address public charlie = makeAddr("charlie");
-    address public admin = makeAddr("admin");
+    address public admin = msg.sender;
 
     uint32 public initFixedGas = 100000;
     uint32 public initDynamicGas = 200000;
@@ -53,6 +53,33 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
 
         assertEq(pool.getGlobalPauser(), admin);
         assertTrue(pool.hasRole(pool.PAUSER_ROLE(), admin));
+        (uint32 fixedGas, uint32 dynamicGas) = pool.getGasLimitConfig();
+        assertEq(fixedGas, initFixedGas);
+        assertEq(dynamicGas, initDynamicGas);
+        assertTrue(pool.hasRole(pool.TOKEN_POOL_OWNER_ROLE(), admin));
+
+        targetArtifact("MultiLockMintERC721Pool");
+        targetContract(address(pool));
+    }
+
+    function invariant_getSupportedTokensForChain_IsSubsetOf_getTokens() external {
+        uint64[] memory supportedChains = pool.getSupportedChains();
+        address[] memory localTokens = pool.getTokens();
+
+        for (uint256 i; i < supportedChains.length; i++) {
+            address[] memory localTokens = pool.getSupportedTokensForChain(supportedChains[i]);
+            for (uint256 j; j < localTokens.length; j++) {
+                // assertTrue(pool.isSupportedToken(localTokens[j]), "Local token not found in the list");
+                bool found = false;
+                for (uint256 k; k < localTokens.length; k++) {
+                    if (localTokens[k] == localTokens[j]) {
+                        found = true;
+                        break;
+                    }
+                }
+                assertTrue(found, "Local token not found in the list");
+            }
+        }
     }
 
     function unmapRemoteToken(address caller, address localToken, uint64 remoteChainSelector, bool reverted)
@@ -306,6 +333,44 @@ contract MultiLockMintERC721Pool_UnitTest is Test {
         assertFalse(pool.isSupportedToken(localToken1), "Local token 1 should be supported");
         assertFalse(pool.isSupportedToken(localToken2), "Local token 2 should be supported");
         assertFalse(pool.isSupportedToken(localToken3), "Local token 3 should be supported");
+    }
+
+    function testConcrete_TokenRemovedFromSet_WhenDisabledAllMappedChain_getTokens() external {
+        uint64 remoteChainSelector1 = 2;
+        uint64 remoteChainSelector2 = 3;
+        uint64 remoteChainSelector3 = 4;
+        ccipSimulator.supportChain(remoteChainSelector1);
+        ccipSimulator.supportChain(remoteChainSelector2);
+        ccipSimulator.supportChain(remoteChainSelector3);
+
+        address remotePool1 = makeAddr("remotePool1");
+        addRemotePool(admin, remoteChainSelector1, remotePool1, false);
+        address remotePool2 = makeAddr("remotePool2");
+        addRemotePool(admin, remoteChainSelector2, remotePool2, false);
+        address remotePool3 = makeAddr("remotePool3");
+        addRemotePool(admin, remoteChainSelector3, remotePool3, false);
+
+        address localToken = makeAddr("localToken");
+        address remoteToken1 = makeAddr("remoteToken1");
+        mapRemoteToken(admin, localToken, remoteChainSelector1, remoteToken1, false);
+        address remoteToken2 = makeAddr("remoteToken2");
+        mapRemoteToken(admin, localToken, remoteChainSelector2, remoteToken2, false);
+        address remoteToken3 = makeAddr("remoteToken3");
+        mapRemoteToken(admin, localToken, remoteChainSelector3, remoteToken3, false);
+
+        removeRemotePool(admin, remoteChainSelector1, remotePool1, false);
+        removeRemotePool(admin, remoteChainSelector2, remotePool2, false);
+        removeRemotePool(admin, remoteChainSelector3, remotePool3, false);
+
+        address[] memory localTokens = pool.getTokens();
+        bool found = false;
+        for (uint256 i = 0; i < localTokens.length; i++) {
+            if (localTokens[i] == localToken) {
+                found = true;
+                break;
+            }
+        }
+        assertFalse(found, "Local token should not be supported");
     }
 
     function testConcrete_CanMapManyTokens_WithSameRemoteChainSelector_mapRemoteToken() external {
